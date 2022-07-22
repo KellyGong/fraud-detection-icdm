@@ -14,13 +14,13 @@ h_dim=256
 n_bases=8
 num_layers=3
 fanout=150
-n_epoch=100
+n_epoch=5
 early_stopping=6
 lr=0.001
 batch_size=64
 
 
-python rgcn_sage_icdm.py --dataset $pyg_data_session1".pt" \
+python train.py --dataset $pyg_data_session1".pt" \
                 --h-dim $h_dim \
                 --n-bases $n_bases \
                 --n-layers $num_layers \
