@@ -19,14 +19,14 @@ import nni
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str, default='dataset/pyg_data/icdm2022_session1.pt')
 parser.add_argument('--labeled-class', type=str, default='item')
-parser.add_argument("--batch-size", type=int, default=64,
+parser.add_argument("--batch-size", type=int, default=256,
                     help="Mini-batch size. If -1, use full graph training.")
 parser.add_argument("--model", choices=["RGCN", "RGPRGNN"], default="RGPRGNN")
 parser.add_argument("--fanout", type=int, default=150,
                     help="Fan-out of neighbor sampling.")
 parser.add_argument("--n-layers", type=int, default=3,
                     help="number of propagation rounds")
-parser.add_argument("--h-dim", type=int, default=256,
+parser.add_argument("--h-dim", type=int, default=32,
                     help="number of hidden units")
 parser.add_argument("--in-dim", type=int, default=256,
                     help="number of hidden units")
@@ -34,14 +34,14 @@ parser.add_argument("--n-bases", type=int, default=8,
                     help="number of filter weight matrices, default: -1 [use all]")
 parser.add_argument("--validation", type=bool, default=True)
 parser.add_argument("--early_stopping", type=int, default=5)
-parser.add_argument("--n-epoch", type=int, default=20)
+parser.add_argument("--n-epoch", type=int, default=100)
 parser.add_argument("--test-file", type=str, default="dataset/icdm2022_session1_test_ids.txt")
 parser.add_argument("--json-file", type=str, default="pyg_pred_session1.json")
-parser.add_argument("--inference", type=bool, default=False)
+parser.add_argument("--inference", type=bool, default=True)
 # parser.add_argument("--record-file", type=str, default="record.txt")
-parser.add_argument("--lr", type=float, default=0.001)
-parser.add_argument("--model-id", type=str, default="0")
-parser.add_argument("--device", type=str, default="cuda")
+parser.add_argument("--lr", type=float, default=0.01)
+parser.add_argument("--model-id", type=str, default="cuda:1")
+parser.add_argument("--device", type=str, default="cuda:1")
 
 # grid search hyperparameters
 parser.add_argument("--nni", action='store_true', default=False)
@@ -231,7 +231,7 @@ if args.inference == False:
             })
             if val_ap > best_val_ap:
                 best_val_ap = val_ap
-                # torch.save(model, osp.join("best_model/", args.device + ".pth"))
+                torch.save(model, osp.join("best_model/", args.device + ".pth"))
             
             if earlystop.update(val_ap):
                 print("Early Stopping")
