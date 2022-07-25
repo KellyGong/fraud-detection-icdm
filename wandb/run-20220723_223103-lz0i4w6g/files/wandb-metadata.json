@@ -1,0 +1,29 @@
+{
+    "os": "Linux-5.4.0-117-generic-x86_64-with-debian-bullseye-sid",
+    "python": "3.7.13",
+    "heartbeatAt": "2022-07-23T14:31:05.726335",
+    "startedAt": "2022-07-23T14:31:03.757196",
+    "docker": null,
+    "gpu": "NVIDIA GeForce RTX 3090",
+    "gpu_count": 8,
+    "cpu_count": 96,
+    "cuda": null,
+    "args": [
+        "--batch_size=64",
+        "--fanout=100",
+        "--h_dim=128",
+        "--lr=0.001"
+    ],
+    "state": "running",
+    "program": "train.py",
+    "codePath": "train.py",
+    "git": {
+        "remote": "git@github.com:KellyGong/fraud-detection-icdm.git",
+        "commit": "d9dabcdb535d520758f3c31a485660365507d4d1"
+    },
+    "email": "864737851@qq.com",
+    "root": "/data/zzh/gz/fraud-detection-icdm",
+    "host": "jojo",
+    "username": "zzh",
+    "executable": "/data/zzh/anaconda3/envs/graph_pyg/bin/python"
+}

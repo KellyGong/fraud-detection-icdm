@@ -1,5 +1,6 @@
 dataset/
 best_model/
+best_result/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
