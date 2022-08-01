@@ -1,7 +1,9 @@
+from dataclasses import dataclass
 import os
 import os.path as osp
 import argparse
 import json
+from tabnanny import verbose
 
 from utils import EarlyStop, setup_seed
 
@@ -13,20 +15,23 @@ from tqdm import tqdm
 from torch_geometric.loader import NeighborLoader
 from sklearn.metrics import average_precision_score
 
-from model import RGCN, RGPRGNN
+from model import RGCN, RGPRGNN, RGAT
 import nni
 import wandb
 import random
 
+from sklearn.decomposition import PCA
+
 # keep_data_index = [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 25, 26, 27, 28, 29, 31, 33, 34, 35, 37, 38, 39, 40, 41, 43, 44, 47, 49, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 64, 66, 68, 69, 70, 72, 73, 74, 75, 76, 77, 79, 80, 82, 83, 84, 85, 87, 88, 89, 90, 91, 93, 94, 96, 98, 99, 100, 101, 102, 104, 106, 108, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 123, 124, 125, 126, 127, 129, 130, 131, 132, 133, 135, 136, 137, 140, 141, 142, 144, 145, 146, 147, 149, 150, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 167, 168, 169, 170, 171, 173, 174, 175, 176, 177, 178, 179, 180, 182, 185, 186, 188, 190, 191, 192, 193, 195, 196, 197, 198, 199, 200, 201, 202, 203, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 216, 217, 218, 219, 220, 221, 222, 224, 225, 226, 228, 229, 232, 233, 237, 238, 239, 241, 242, 243, 244, 245, 246, 247, 250, 253, 254, 255]
 
+# PCA_dim = 64
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str, default='dataset/pyg_data/icdm2022_session1.pt')
 parser.add_argument('--labeled-class', type=str, default='item')
 parser.add_argument("--batch_size", type=int, default=64,
                     help="Mini-batch size. If -1, use full graph training.")
-parser.add_argument("--model", choices=["RGCN", "RGPRGNN"], default="RGPRGNN")
+parser.add_argument("--model", choices=["RGCN", "RGPRGNN", "RGAT"], default="RGPRGNN")
 parser.add_argument("--fanout", type=int, default=150,
                     help="Fan-out of neighbor sampling.")
 parser.add_argument("--n_layers", type=int, default=3,
@@ -37,6 +42,10 @@ parser.add_argument("--in-dim", type=int, default=256,
                     help="number of hidden units")
 parser.add_argument("--n_bases", type=int, default=8,
                     help="number of filter weight matrices, default: -1 [use all]")
+parser.add_argument("--dropout", type=float, default=0.1)
+parser.add_argument("--activation", choices=['relu', 'leaklyrelu', 'elu'], default='elu')
+parser.add_argument("--label_smoothing", type=float, default=0)
+
 parser.add_argument("--validation", type=bool, default=True)
 parser.add_argument("--early_stopping", type=int, default=5)
 parser.add_argument("--n-epoch", type=int, default=100)
@@ -52,7 +61,7 @@ parser.add_argument("--device", type=str, default="cuda")
 
 # grid search hyperparameters
 parser.add_argument("--nni", action='store_true', default=False)
-parser.add_argument('--wandb', action='store_true', default=False)
+parser.add_argument('--wandb', action='store_true', default=True)
 
 args = parser.parse_args()
 
@@ -70,6 +79,7 @@ if args.wandb:
     args = argparse.Namespace(**wandb.config)
 
 # args.in_dim = len(keep_data_index)
+# args.in_dim = PCA_dim
 
 print(args)
 
@@ -87,9 +97,18 @@ labeled_class = args.labeled_class
 
 # print(hgraph.node_types)
 
-# for node_type in hgraph.node_types:
-#     hgraph[node_type]['x'] = torch.index_select(hgraph[node_type]['x'], 1, torch.tensor(keep_data_index))
 
+# for node_type in hgraph.node_types:
+#     # hgraph[node_type]['x'] = torch.index_select(hgraph[node_type]['x'], 1, torch.tensor(keep_data_index))
+#     print('begin PCA')
+#     pca = PCA(n_components=PCA_dim)
+#     pca.fit(hgraph[node_type]['x'][:30000].numpy())
+#     hgraph[node_type]['x'] = torch.FloatTensor(pca.transform(hgraph[node_type]['x'].numpy()))
+#     print('end PCA')
+
+# for node_type in hgraph.node_types:
+#     # hgraph[node_type]['x'] = torch.index_select(hgraph[node_type]['x'], 1, torch.tensor(keep_data_index))
+#     hgraph[node_type]['x'] = torch.FloatTensor(pca.transform(hgraph[node_type]['x'].numpy()))
 
 if args.inference == False:
     train_idx = hgraph[labeled_class].pop('train_idx')
@@ -101,7 +120,11 @@ converted_test_id = []
 for i in test_id:
     converted_test_id.append(hgraph['item'].maps[i])
 test_idx = torch.LongTensor(converted_test_id)
-    
+
+# C class balance parameter
+
+C = len(np.where(hgraph[labeled_class]['y'].numpy() == 1)[0]) / len(np.where(hgraph[labeled_class]['y'].numpy() == 1)[0])
+class_balance_ratio = torch.tensor([1, C], device=device, requires_grad=False)
 
 def gen_dataloader(hgraph, labeled_class, idx, args, shuffle=False, balance=False):
     if balance:
@@ -115,7 +138,7 @@ def gen_dataloader(hgraph, labeled_class, idx, args, shuffle=False, balance=Fals
         np.random.shuffle(new_idx)
         new_idx = torch.tensor(new_idx)
 
-        print(torch.count_nonzero(hgraph[labeled_class]['x'][idx]).item())
+        # print(torch.count_nonzero(hgraph[labeled_class]['x'][idx]).item())
 
         dataloader = NeighborLoader(hgraph,
                                     input_nodes=(labeled_class, new_idx),
@@ -149,6 +172,15 @@ else:
                      out_channels=2,
                      num_relations=num_relations,
                      num_bases=args.n_bases,
+                     n_layers=args.n_layers,
+                     dropout=args.dropout)
+    
+    elif args.model == 'RGAT':
+        model = RGAT(in_channels=args.in_dim,
+                     hidden_channels=args.h_dim,
+                     out_channels=2,
+                     num_relations=num_relations,
+                     num_bases=args.n_bases,
                      n_layers=args.n_layers)
     
     elif args.model == 'RGPRGNN':
@@ -158,7 +190,8 @@ else:
                         num_relations=num_relations,
                         num_bases=args.n_bases,
                         alpha=args.alpha,
-                        n_layers=args.n_layers)
+                        n_layers=args.n_layers,
+                        dropout=args.dropout)
     
     else:
         raise NotImplementedError
@@ -194,6 +227,7 @@ def train(epoch):
 
         y_hat = model(batch.x.to(device), batch.edge_index.to(device), batch.edge_type.to(device))[
                 start:start + batch_size]
+        # loss = F.cross_entropy(y_hat, y, label_smoothing=args.label_smoothing)
         loss = F.cross_entropy(y_hat, y)
         loss.backward()
         optimizer.step()
@@ -322,7 +356,7 @@ if args.inference == False:
 # if args.inference == True:
 
 model = torch.load(model_path, map_location=args.device)
-
+print(model_path)
 y_pred = test()
 result_path = osp.join('best_result', "pyg_pred_session1_" + args.model + "_" + str(model_id) + ".json")
 with open(result_path, 'w+') as f:
