@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from torch_geometric.loader import NeighborLoader
+import torch_geometric.transforms as T
 from sklearn.metrics import average_precision_score
 
 from model import RGCN, RGPRGNN, RGAT
@@ -20,14 +21,10 @@ import nni
 import wandb
 import random
 
-from sklearn.decomposition import PCA
-
-# keep_data_index = [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 25, 26, 27, 28, 29, 31, 33, 34, 35, 37, 38, 39, 40, 41, 43, 44, 47, 49, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 64, 66, 68, 69, 70, 72, 73, 74, 75, 76, 77, 79, 80, 82, 83, 84, 85, 87, 88, 89, 90, 91, 93, 94, 96, 98, 99, 100, 101, 102, 104, 106, 108, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 123, 124, 125, 126, 127, 129, 130, 131, 132, 133, 135, 136, 137, 140, 141, 142, 144, 145, 146, 147, 149, 150, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 167, 168, 169, 170, 171, 173, 174, 175, 176, 177, 178, 179, 180, 182, 185, 186, 188, 190, 191, 192, 193, 195, 196, 197, 198, 199, 200, 201, 202, 203, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 216, 217, 218, 219, 220, 221, 222, 224, 225, 226, 228, 229, 232, 233, 237, 238, 239, 241, 242, 243, 244, 245, 246, 247, 250, 253, 254, 255]
-
-# PCA_dim = 64
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str, default='dataset/pyg_data/icdm2022_session1.pt')
+# parser.add_argument('--dataset', type=str, default='dataset/pyg_data/icdm2022_session1_debug.pt')
 parser.add_argument('--labeled-class', type=str, default='item')
 parser.add_argument("--batch_size", type=int, default=64,
                     help="Mini-batch size. If -1, use full graph training.")
@@ -54,14 +51,20 @@ parser.add_argument("--json-file", type=str, default="pyg_pred_session1.json")
 parser.add_argument("--inference", type=bool, default=False)
 # parser.add_argument("--record-file", type=str, default="record.txt")
 
+# pseudo label training
+parser.add_argument("--pseudo_positive", type=int, default=500)
+parser.add_argument("--pseudo_negative", type=int, default=2000)
+parser.add_argument("--pseudo", action='store_true', default=False)
+
 parser.add_argument("--alpha", type=float, default=0.1)
 
 parser.add_argument("--lr", type=float, default=0.001)
-parser.add_argument("--device", type=str, default="cuda")
+parser.add_argument("--device", type=str, default="cuda:5")
 
 # grid search hyperparameters
 parser.add_argument("--nni", action='store_true', default=False)
-parser.add_argument('--wandb', action='store_true', default=True)
+parser.add_argument("--wandb", action='store_true', default=False)
+parser.add_argument("--debug", action='store_true', default=False)
 
 args = parser.parse_args()
 
@@ -78,11 +81,6 @@ if args.wandb:
                config=vars(args))
     args = argparse.Namespace(**wandb.config)
 
-# args.in_dim = len(keep_data_index)
-# args.in_dim = PCA_dim
-
-print(args)
-
 model_id = random.randint(0, 100000)
 model_path = osp.join('best_model', args.model + "_" + str(model_id) + ".pth")
 
@@ -97,34 +95,35 @@ labeled_class = args.labeled_class
 
 # print(hgraph.node_types)
 
-
-# for node_type in hgraph.node_types:
-#     # hgraph[node_type]['x'] = torch.index_select(hgraph[node_type]['x'], 1, torch.tensor(keep_data_index))
-#     print('begin PCA')
-#     pca = PCA(n_components=PCA_dim)
-#     pca.fit(hgraph[node_type]['x'][:30000].numpy())
-#     hgraph[node_type]['x'] = torch.FloatTensor(pca.transform(hgraph[node_type]['x'].numpy()))
-#     print('end PCA')
-
-# for node_type in hgraph.node_types:
-#     # hgraph[node_type]['x'] = torch.index_select(hgraph[node_type]['x'], 1, torch.tensor(keep_data_index))
-#     hgraph[node_type]['x'] = torch.FloatTensor(pca.transform(hgraph[node_type]['x'].numpy()))
-
 if args.inference == False:
-    train_idx = hgraph[labeled_class].pop('train_idx')
+    # train_idx = hgraph[labeled_class].pop('train_idx')
+    train_idx = hgraph[labeled_class]['train_idx']
     if args.validation:
-        val_idx = hgraph[labeled_class].pop('val_idx')
+        # val_idx = hgraph[labeled_class].pop('val_idx')
+        val_idx = hgraph[labeled_class]['val_idx']
 
 test_id = [int(x) for x in open(args.test_file).readlines()]
 converted_test_id = []
 for i in test_id:
     converted_test_id.append(hgraph['item'].maps[i])
+ 
 test_idx = torch.LongTensor(converted_test_id)
+
+
+nolabel_idx = np.array([i for i in range(hgraph[labeled_class]['y'].shape[0])])
+nolabel_idx = np.setdiff1d(nolabel_idx, train_idx.numpy(), True)
+nolabel_idx = np.setdiff1d(nolabel_idx, val_idx.numpy(), True)
+nolabel_idx = np.setdiff1d(nolabel_idx, test_idx.numpy(), True)
+nolabel_idx = torch.LongTensor(nolabel_idx)
 
 # C class balance parameter
 
 C = len(np.where(hgraph[labeled_class]['y'].numpy() == 1)[0]) / len(np.where(hgraph[labeled_class]['y'].numpy() == 1)[0])
 class_balance_ratio = torch.tensor([1, C], device=device, requires_grad=False)
+
+args.pseudo_negative = int(args.pseudo_positive / C)
+
+print(args)
 
 def gen_dataloader(hgraph, labeled_class, idx, args, shuffle=False, balance=False):
     if balance:
@@ -227,7 +226,6 @@ def train(epoch):
 
         y_hat = model(batch.x.to(device), batch.edge_index.to(device), batch.edge_type.to(device))[
                 start:start + batch_size]
-        # loss = F.cross_entropy(y_hat, y, label_smoothing=args.label_smoothing)
         loss = F.cross_entropy(y_hat, y)
         loss.backward()
         optimizer.step()
@@ -237,6 +235,8 @@ def train(epoch):
         total_correct += int((y_hat.argmax(dim=-1) == y).sum())
         total_examples += batch_size
         pbar.update(batch_size)
+        if args.debug:
+            break
     pbar.close()
     ap_score = average_precision_score(torch.hstack(y_true).numpy(), torch.hstack(y_pred).numpy())
 
@@ -272,10 +272,59 @@ def val():
         total_correct += int((y_hat.argmax(dim=-1) == y).sum())
         total_examples += batch_size
         pbar.update(batch_size)
+        if args.debug:
+            break
     pbar.close()
     ap_score = average_precision_score(torch.hstack(y_true).numpy(), torch.hstack(y_pred).numpy())
 
     return total_loss / total_examples, total_correct / total_examples, ap_score
+
+
+@torch.no_grad()
+def pseudo_label_gen():
+    global train_idx, nolabel_idx
+
+    model.eval()
+    test_loader = gen_dataloader(hgraph, labeled_class, nolabel_idx, args, shuffle=True)
+    pbar = tqdm(total=int(len(test_loader.dataset)), ascii=True)
+    pbar.set_description(f'Generate Pseudo Label')
+    y_pred = []
+    for i, batch in enumerate(test_loader):
+        batch_size = batch[labeled_class].batch_size
+        start = 0
+        for ntype in batch.node_types:
+            if ntype == labeled_class:
+                break
+            start += batch[ntype].num_nodes
+
+        batch = batch.to_homogeneous()
+        y_hat = model(batch.x.to(device), batch.edge_index.to(device), batch.edge_type.to(device))[
+                start:start + batch_size]
+        pbar.update(batch_size)
+        y_pred.append(F.softmax(y_hat, dim=1)[:, 1].detach().cpu())
+        if args.debug or i > 2000:
+            break
+    pbar.close()
+
+    y_pred_tensor = torch.cat(y_pred)
+    top_abnormal_pred, top_abnormal_indices = torch.sort(y_pred_tensor, descending=True)
+    top_abnormal_idx = batch.n_id[top_abnormal_indices]
+
+    top_normal_pred, top_normal_indices = torch.sort(y_pred_tensor, descending=False)
+    top_normal_idx = batch.n_id[top_normal_indices]
+
+    iteration_top_abnormal_idx = top_abnormal_idx[:args.pseudo_positive]
+    iteration_top_normal_idx = top_normal_idx[:args.pseudo_negative]
+
+    # add new pseudo labels to graph for new training
+    hgraph[labeled_class]['y'][iteration_top_abnormal_idx] = 1
+    hgraph[labeled_class]['y'][iteration_top_normal_idx] = 0
+
+    train_idx = torch.cat([train_idx, iteration_top_abnormal_idx, iteration_top_normal_idx])
+
+    nolabel_idx = np.setdiff1d(nolabel_idx.numpy(), iteration_top_abnormal_idx.numpy(), True)
+    nolabel_idx = np.setdiff1d(nolabel_idx.numpy(), iteration_top_normal_idx.numpy(), True)
+    nolabel_idx = torch.LongTensor(nolabel_idx)
 
 
 @torch.no_grad()
@@ -310,6 +359,7 @@ if args.inference == False:
     for epoch in range(1, args.n_epoch + 1):
         train_loss, train_acc, train_ap = train(epoch)
         print(f'Train: Epoch {epoch:02d}, Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, AP_Score: {train_ap:.4f}')
+
         if args.validation:
             val_loss, val_acc, val_ap = val()
             print(f'Val: Epoch: {epoch:02d}, Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, AP_Score: {val_ap:.4f}')
@@ -322,7 +372,7 @@ if args.inference == False:
                     "acc": val_acc
                 })
             
-            # nni
+            # wandb
             if args.wandb:
                 wandb.log({
                     "val_ap": val_ap,
@@ -339,6 +389,11 @@ if args.inference == False:
             if earlystop.update(val_ap):
                 print("Early Stopping")
                 break
+        
+        # add pseudo label to the training set
+        if args.pseudo and epoch % 8 == 0:
+            pseudo_label_gen()
+        
 
     print(f"Complete Training (best val_ap: {best_val_ap})")
 
