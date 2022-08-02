@@ -51,8 +51,9 @@ def read_node_atts(node_file, pyg_file, label_file=None):
                         node_embeds[node_type][node_id_v2] = np.array([x for x in info[2].split(":")], dtype=np.float32)
 
                 count += 1
-                if count % 100000 == 0:
+                if count % 20000 == 0:
                     process.update(100000)
+                    break
 
         process.update(node_size % 100000)
         process.close()
@@ -61,17 +62,20 @@ def read_node_atts(node_file, pyg_file, label_file=None):
         print("Num of total nodes:", count)
         print('Node_types:', list(node_maps.keys()))
         print('Node_type Num Num_lack_feature:')
-        # for node_type in node_maps:
-        #     print(node_type, len(node_maps[node_type]), lack_num[node_type])
+        for node_type in node_maps:
+            print(node_type, len(node_maps[node_type]), lack_num[node_type])
 
         labels = []
         if label_file is not None:
             labels_info = [x.strip().split(",") for x in open(label_file).readlines()]
             for i in range(len(labels_info)):
-                x = labels_info[i]
-                item_id = node_maps['item'][int(x[0])]
-                label = int(x[1])
-                labels.append([item_id, label])
+                try:
+                    x = labels_info[i]
+                    item_id = node_maps['item'][int(x[0])]
+                    label = int(x[1])
+                    labels.append([item_id, label])
+                except:
+                    continue
 
         nodes_dict = {'maps': node_maps, 'embeds': node_embeds}
         nodes_dict['labels'] = {}
@@ -135,25 +139,56 @@ def format_pyg_graph(edge_file, node_file, pyg_file, label_file=None):
     process = tqdm(total=edge_size)
     edges = {}
     count = 0
+    # with open(edge_file, 'r') as rf:
+    #     while True:
+    #         line = rf.readline()
+    #         if line is None or len(line) == 0:
+    #             break
+    #         try:
+    #             line_info = line.strip().split(",")
+    #             source_id, dest_id, source_type, dest_type, edge_type = line_info
+    #             source_id = graph[source_type].maps[int(source_id)]
+    #             dest_id = graph[dest_type].maps[int(dest_id)]
+    #             edges.setdefault(edge_type, {})
+    #             edges[edge_type].setdefault('source', []).append(int(source_id))
+    #             edges[edge_type].setdefault('dest', []).append(int(dest_id))
+    #             edges[edge_type].setdefault('source_type', source_type)
+    #             edges[edge_type].setdefault('dest_type', dest_type)
+    #             count += 1
+    #             if count % 100000 == 0:
+    #                 process.update(100000)
+                    
+                
+    #         except:
+    #             continue
     with open(edge_file, 'r') as rf:
         while True:
             line = rf.readline()
             if line is None or len(line) == 0:
                 break
-            line_info = line.strip().split(",")
-            source_id, dest_id, source_type, dest_type, edge_type = line_info
-            source_id = graph[source_type].maps[int(source_id)]
-            dest_id = graph[dest_type].maps[int(dest_id)]
-            edges.setdefault(edge_type, {})
-            edges[edge_type].setdefault('source', []).append(int(source_id))
-            edges[edge_type].setdefault('dest', []).append(int(dest_id))
-            edges[edge_type].setdefault('source_type', source_type)
-            edges[edge_type].setdefault('dest_type', dest_type)
-            count += 1
-            if count % 100000 == 0:
-                process.update(100000)
+            try:
+                line_info = line.strip().split(",")
+                process.update(1)
+                source_id, dest_id, source_type, dest_type, edge_type = line_info
+                source_id = graph[source_type].maps[int(source_id)]
+                dest_id = graph[dest_type].maps[int(dest_id)]
+                edges.setdefault(edge_type, {})
+                edges[edge_type].setdefault('source', []).append(int(source_id))
+                edges[edge_type].setdefault('dest', []).append(int(dest_id))
+                edges[edge_type].setdefault('source_type', source_type)
+                edges[edge_type].setdefault('dest_type', dest_type)
+                count += 1
+                # if count == 200000:
+                #     break
+                if count == 200000:
+                    break
+                
+            except:
+                continue
+
     process.update(edge_size % 100000)
     process.close()
+    print(f'Edge Count: {str(count)}')
     print('Complete loading edge information\n')
 
     print('Start converting edge information')
@@ -178,9 +213,12 @@ def format_pyg_graph(edge_file, node_file, pyg_file, label_file=None):
                       ('e', 'F_1', 'f'),
                       ('e', 'H', 'a'),
                       ('d', 'C_1', 'f')]:
-        temp = graph[edge_type].edge_index
-        del graph[edge_type]
-        graph[edge_type].edge_index = temp
+        try:
+            temp = graph[edge_type].edge_index
+            del graph[edge_type]
+            graph[edge_type].edge_index = temp
+        except:
+            continue
 
     print('Complete converting edge information\n')
     print('Start saving into pyg data')
@@ -197,7 +235,7 @@ if __name__ == "__main__":
     parser.add_argument('--graph', type=str, default="dataset/icdm2022_session1_edges.csv")
     parser.add_argument('--node', type=str, default="dataset/icdm2022_session1_nodes.csv")
     parser.add_argument('--label', type=str, default="dataset/icdm2022_session1_train_labels.csv")
-    parser.add_argument('--storefile', type=str, default="dataset/pyg_data/icdm2022_session1")
+    parser.add_argument('--storefile', type=str, default="dataset/pyg_data/icdm2022_session1_debug")
     parser.add_argument('--reload', type=bool, default=False, help="Whether node features should be reloaded")
     args = parser.parse_args()
     if "session2" in args.storefile:
