@@ -28,8 +28,8 @@ parser.add_argument('--dataset', type=str, default='dataset/pyg_data/icdm2022_se
 parser.add_argument('--labeled-class', type=str, default='item')
 parser.add_argument("--batch_size", type=int, default=64,
                     help="Mini-batch size. If -1, use full graph training.")
-parser.add_argument("--model", choices=["RGCN", "RGPRGNN", "RGAT"], default="RGPRGNN")
-parser.add_argument("--fanout", type=int, default=150,
+parser.add_argument("--model", choices=["RGCN", "RGPRGNN", "RGAT"], default="RGCN")
+parser.add_argument("--fanout", type=int, default=100,
                     help="Fan-out of neighbor sampling.")
 parser.add_argument("--n_layers", type=int, default=3,
                     help="number of propagation rounds")
@@ -40,11 +40,11 @@ parser.add_argument("--in-dim", type=int, default=256,
 parser.add_argument("--n_bases", type=int, default=8,
                     help="number of filter weight matrices, default: -1 [use all]")
 parser.add_argument("--dropout", type=float, default=0.1)
-parser.add_argument("--activation", choices=['relu', 'leaklyrelu', 'elu'], default='elu')
+parser.add_argument("--activation", choices=['relu', 'leaklyrelu', 'elu'], default='relu')
 parser.add_argument("--label_smoothing", type=float, default=0)
 
 parser.add_argument("--validation", type=bool, default=True)
-parser.add_argument("--early_stopping", type=int, default=5)
+parser.add_argument("--early_stopping", type=int, default=10)
 parser.add_argument("--n-epoch", type=int, default=100)
 parser.add_argument("--test-file", type=str, default="dataset/icdm2022_session1_test_ids.txt")
 parser.add_argument("--json-file", type=str, default="pyg_pred_session1.json")
@@ -59,11 +59,11 @@ parser.add_argument("--pseudo", action='store_true', default=False)
 parser.add_argument("--alpha", type=float, default=0.1)
 
 parser.add_argument("--lr", type=float, default=0.001)
-parser.add_argument("--device", type=str, default="cuda:5")
+parser.add_argument("--device", type=str, default="cuda")
 
 # grid search hyperparameters
 parser.add_argument("--nni", action='store_true', default=False)
-parser.add_argument("--wandb", action='store_true', default=False)
+parser.add_argument("--wandb", action='store_true', default=True)
 parser.add_argument("--debug", action='store_true', default=False)
 
 args = parser.parse_args()
@@ -118,7 +118,7 @@ nolabel_idx = torch.LongTensor(nolabel_idx)
 
 # C class balance parameter
 
-C = len(np.where(hgraph[labeled_class]['y'].numpy() == 1)[0]) / len(np.where(hgraph[labeled_class]['y'].numpy() == 1)[0])
+C = len(np.where(hgraph[labeled_class]['y'].numpy() == 1)[0]) / len(np.where(hgraph[labeled_class]['y'].numpy() == 0)[0])
 class_balance_ratio = torch.tensor([1, C], device=device, requires_grad=False)
 
 args.pseudo_negative = int(args.pseudo_positive / C)
@@ -150,7 +150,7 @@ def gen_dataloader(hgraph, labeled_class, idx, args, shuffle=False, balance=Fals
                                     input_nodes=(labeled_class, idx),
                                     num_neighbors=[args.fanout] * args.n_layers,
                                     shuffle=shuffle,
-                                    batch_size=args.batch_size)
+                                    batch_size=args.batch_size, num_workers=4)
     return dataloader
 
 
@@ -323,7 +323,7 @@ def pseudo_label_gen():
     train_idx = torch.cat([train_idx, iteration_top_abnormal_idx, iteration_top_normal_idx])
 
     nolabel_idx = np.setdiff1d(nolabel_idx.numpy(), iteration_top_abnormal_idx.numpy(), True)
-    nolabel_idx = np.setdiff1d(nolabel_idx.numpy(), iteration_top_normal_idx.numpy(), True)
+    nolabel_idx = np.setdiff1d(nolabel_idx, iteration_top_normal_idx.numpy(), True)
     nolabel_idx = torch.LongTensor(nolabel_idx)
 
 
@@ -391,7 +391,7 @@ if args.inference == False:
                 break
         
         # add pseudo label to the training set
-        if args.pseudo and epoch % 8 == 0:
+        if args.pseudo and epoch % 5 == 0:
             pseudo_label_gen()
         
 
