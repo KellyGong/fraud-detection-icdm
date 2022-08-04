@@ -9,14 +9,16 @@ from torch_geometric.nn import RGCNConv
 
 
 class RGPRGNN(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, num_relations, num_bases, alpha=0.1, n_layers=3, dropout=0.4, activation='relu'):
+    def __init__(self, in_channels, hidden_channels, out_channels, num_relations, num_bases, alpha=0.1, n_layers=3, dropout=0.4, activation='relu', pre_transform=False):
         super().__init__()
         self.convs = torch.nn.ModuleList()
         for i in range(n_layers):
             self.convs.append(RGCNConv(hidden_channels, hidden_channels, num_relations, num_bases=num_bases))
 
+        self.pre_transform = pre_transform
         # GPRGNN
-        self.lin1 = Linear(in_channels, hidden_channels)
+        if not self.pre_transform:
+            self.lin1 = Linear(in_channels, hidden_channels)
         self.lin2 = Linear(hidden_channels, out_channels)
         K = n_layers
         self.K = K
@@ -43,7 +45,6 @@ class RGPRGNN(torch.nn.Module):
         self.temp.data[-1] = (1-self.alpha)**self.K
 
     def forward(self, x, edge_index, edge_type):
-
         # x = self.lin1(x)
         # hidden = x*(self.temp[0])
         # x = hidden
@@ -56,9 +57,10 @@ class RGPRGNN(torch.nn.Module):
         
         # hidden = self.lin2(hidden)
 
-        x = self.lin1(x)
-        x = self.activation(x)
-        x = F.dropout(x, p=self.dropout, training=self.training)
+        if not self.pre_transform:
+            x = self.lin1(x)
+            x = self.activation(x)
+            x = F.dropout(x, p=self.dropout, training=self.training)
         hidden = x*(self.temp[0])
         x = hidden
         for i, conv in enumerate(self.convs):
@@ -66,7 +68,9 @@ class RGPRGNN(torch.nn.Module):
             if i < len(self.convs) - 1:
                 x = self.activation(x)
                 x = F.dropout(x, p=self.dropout, training=self.training)
-            hidden = hidden + self.temp[i+1]*x
+                # x = x / torch.norm(x, dim=1, keepdim=True)
+                hidden = hidden + self.temp[i+1]*x
         
+        # hidden = hidden / torch.norm(hidden, dim=1, keepdim=True)
         hidden = self.lin2(hidden)
         return hidden

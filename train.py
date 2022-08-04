@@ -16,7 +16,7 @@ from torch_geometric.loader import NeighborLoader
 import torch_geometric.transforms as T
 from sklearn.metrics import average_precision_score
 
-from model import RGCN, RGPRGNN, RGAT
+from model import RGCN, RGPRGNN, RGAT, Node_Transformation
 import nni
 import wandb
 import random
@@ -28,8 +28,8 @@ parser.add_argument('--dataset', type=str, default='dataset/pyg_data/icdm2022_se
 parser.add_argument('--labeled-class', type=str, default='item')
 parser.add_argument("--batch_size", type=int, default=64,
                     help="Mini-batch size. If -1, use full graph training.")
-parser.add_argument("--model", choices=["RGCN", "RGPRGNN", "RGAT"], default="RGCN")
-parser.add_argument("--fanout", type=int, default=100,
+parser.add_argument("--model", choices=["RGCN", "RGPRGNN", "RGAT"], default="RGPRGNN")
+parser.add_argument("--fanout", type=int, default=150,
                     help="Fan-out of neighbor sampling.")
 parser.add_argument("--n_layers", type=int, default=3,
                     help="number of propagation rounds")
@@ -54,16 +54,17 @@ parser.add_argument("--inference", type=bool, default=False)
 # pseudo label training
 parser.add_argument("--pseudo_positive", type=int, default=500)
 parser.add_argument("--pseudo_negative", type=int, default=2000)
-parser.add_argument("--pseudo", action='store_true', default=False)
+parser.add_argument("--pseudo", action='store_true', default=True)
 
+parser.add_argument("--pre_transform", action='store_true', default=False)
 parser.add_argument("--alpha", type=float, default=0.1)
 
 parser.add_argument("--lr", type=float, default=0.001)
-parser.add_argument("--device", type=str, default="cuda")
+parser.add_argument("--device", type=str, default="cuda:1")
 
 # grid search hyperparameters
 parser.add_argument("--nni", action='store_true', default=False)
-parser.add_argument("--wandb", action='store_true', default=True)
+parser.add_argument("--wandb", action='store_true', default=False)
 parser.add_argument("--debug", action='store_true', default=False)
 
 args = parser.parse_args()
@@ -110,11 +111,11 @@ for i in test_id:
 test_idx = torch.LongTensor(converted_test_id)
 
 
-nolabel_idx = np.array([i for i in range(hgraph[labeled_class]['y'].shape[0])])
-nolabel_idx = np.setdiff1d(nolabel_idx, train_idx.numpy(), True)
-nolabel_idx = np.setdiff1d(nolabel_idx, val_idx.numpy(), True)
-nolabel_idx = np.setdiff1d(nolabel_idx, test_idx.numpy(), True)
-nolabel_idx = torch.LongTensor(nolabel_idx)
+# nolabel_idx = np.array([i for i in range(hgraph[labeled_class]['y'].shape[0])])
+# nolabel_idx = np.setdiff1d(nolabel_idx, train_idx.numpy(), True)
+# nolabel_idx = np.setdiff1d(nolabel_idx, val_idx.numpy(), True)
+# nolabel_idx = np.setdiff1d(nolabel_idx, test_idx.numpy(), True)
+# nolabel_idx = torch.LongTensor(nolabel_idx)
 
 # C class balance parameter
 
@@ -122,6 +123,8 @@ C = len(np.where(hgraph[labeled_class]['y'].numpy() == 1)[0]) / len(np.where(hgr
 class_balance_ratio = torch.tensor([1, C], device=device, requires_grad=False)
 
 args.pseudo_negative = int(args.pseudo_positive / C)
+
+num_node_types = len(hgraph.node_types)
 
 print(args)
 
@@ -183,21 +186,28 @@ else:
                      n_layers=args.n_layers)
     
     elif args.model == 'RGPRGNN':
-        model = RGPRGNN(in_channels=args.in_dim,
+        model = RGPRGNN(in_channels=args.h_dim if args.pre_transform else args.in_dim,
                         hidden_channels=args.h_dim,
                         out_channels=2,
                         num_relations=num_relations,
                         num_bases=args.n_bases,
                         alpha=args.alpha,
                         n_layers=args.n_layers,
-                        dropout=args.dropout)
+                        dropout=args.dropout,
+                        pre_transform=args.pre_transform)
     
     else:
         raise NotImplementedError
 
+    # node_transformation = Node_Transformation(args.in_dim, args.h_dim, num_node_types)
 
     model = model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    if args.pre_transform:
+        node_transformation = Node_Transformation(args.in_dim, args.h_dim, num_node_types).to(device)
+        params = list(model.parameters()) + list(node_transformation.parameters())
+        optimizer = torch.optim.Adam(params, lr=args.lr)
+    else:
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
 
 def train(epoch):
@@ -224,8 +234,13 @@ def train(epoch):
 
         batch = batch.to_homogeneous()
 
-        y_hat = model(batch.x.to(device), batch.edge_index.to(device), batch.edge_type.to(device))[
-                start:start + batch_size]
+        if args.pre_transform:
+            item_id = batch._node_type_names.index(args.labeled_class)
+            batch.x = node_transformation(batch.x.to(device), batch.node_type.to(device), item_id)
+
+        y_hat = model(batch.x.to(device), 
+                      batch.edge_index.to(device),
+                      batch.edge_type.to(device))[start:start + batch_size]
         loss = F.cross_entropy(y_hat, y)
         loss.backward()
         optimizer.step()
@@ -263,6 +278,12 @@ def val():
 
         batch = batch.to_homogeneous()
 
+        # if args.pre_transform:
+        #     batch.x = node_transformation(batch.x.to(device), batch.node_type.to(device))
+        if args.pre_transform:
+            item_id = batch._node_type_names.index(args.labeled_class)
+            batch.x = node_transformation(batch.x.to(device), batch.node_type.to(device), item_id)
+
         y_hat = model(batch.x.to(device), batch.edge_index.to(device), batch.edge_type.to(device))[
                 start:start + batch_size]
         loss = F.cross_entropy(y_hat, y)
@@ -298,6 +319,10 @@ def pseudo_label_gen():
             start += batch[ntype].num_nodes
 
         batch = batch.to_homogeneous()
+
+        if args.pre_transform:
+            batch.x = node_transformation(batch.x.to(device), batch.node_type.to(device))
+
         y_hat = model(batch.x.to(device), batch.edge_index.to(device), batch.edge_type.to(device))[
                 start:start + batch_size]
         pbar.update(batch_size)
@@ -343,6 +368,9 @@ def test():
             start += batch[ntype].num_nodes
 
         batch = batch.to_homogeneous()
+        if args.pre_transform:
+            item_id = batch._node_type_names.index(args.labeled_class)
+            batch.x = node_transformation(batch.x.to(device), batch.node_type.to(device), item_id)
         y_hat = model(batch.x.to(device), batch.edge_index.to(device), batch.edge_type.to(device))[
                 start:start + batch_size]
         pbar.update(batch_size)
@@ -391,7 +419,7 @@ if args.inference == False:
                 break
         
         # add pseudo label to the training set
-        if args.pseudo and epoch % 5 == 0:
+        if args.pseudo and epoch % 3 == 0:
             pseudo_label_gen()
         
 
@@ -421,7 +449,3 @@ with open(result_path, 'w+') as f:
         y_dict["score"] = float(y_pred[i])
         json.dump(y_dict, f)
         f.write('\n')
-
-
-
-
