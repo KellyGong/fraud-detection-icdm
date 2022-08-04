@@ -51,7 +51,7 @@ def read_node_atts(node_file, pyg_file, label_file=None):
                         node_embeds[node_type][node_id_v2] = np.array([x for x in info[2].split(":")], dtype=np.float32)
 
                 count += 1
-                if count % 20000 == 0:
+                if count % 300000 == 0:
                     process.update(100000)
                     break
 
@@ -180,7 +180,7 @@ def format_pyg_graph(edge_file, node_file, pyg_file, label_file=None):
                 count += 1
                 # if count == 200000:
                 #     break
-                if count == 200000:
+                if count == 300000:
                     break
                 
             except:
