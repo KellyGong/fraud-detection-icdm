@@ -69,7 +69,7 @@ class RGPRGNN(torch.nn.Module):
                 x = self.activation(x)
                 x = F.dropout(x, p=self.dropout, training=self.training)
                 # x = x / torch.norm(x, dim=1, keepdim=True)
-                hidden = hidden + self.temp[i+1]*x
+            hidden = hidden + self.temp[i+1]*x
         
         # hidden = hidden / torch.norm(hidden, dim=1, keepdim=True)
         hidden = self.lin2(hidden)

@@ -44,8 +44,8 @@ parser.add_argument("--activation", choices=['relu', 'leaklyrelu', 'elu'], defau
 parser.add_argument("--label_smoothing", type=float, default=0)
 
 parser.add_argument("--validation", type=bool, default=True)
-parser.add_argument("--early_stopping", type=int, default=10)
-parser.add_argument("--n-epoch", type=int, default=100)
+parser.add_argument("--early_stopping", type=int, default=5)
+parser.add_argument("--n-epoch", type=int, default=15)
 parser.add_argument("--test-file", type=str, default="dataset/icdm2022_session1_test_ids.txt")
 parser.add_argument("--json-file", type=str, default="pyg_pred_session1.json")
 parser.add_argument("--inference", type=bool, default=False)
@@ -54,7 +54,7 @@ parser.add_argument("--inference", type=bool, default=False)
 # pseudo label training
 parser.add_argument("--pseudo_positive", type=int, default=500)
 parser.add_argument("--pseudo_negative", type=int, default=2000)
-parser.add_argument("--pseudo", action='store_true', default=True)
+parser.add_argument("--pseudo", action='store_true', default=False)
 
 parser.add_argument("--pre_transform", action='store_true', default=False)
 parser.add_argument("--alpha", type=float, default=0.1)
@@ -103,6 +103,8 @@ if args.inference == False:
         # val_idx = hgraph[labeled_class].pop('val_idx')
         val_idx = hgraph[labeled_class]['val_idx']
 
+train_idx = torch.cat((train_idx, val_idx))
+
 test_id = [int(x) for x in open(args.test_file).readlines()]
 converted_test_id = []
 for i in test_id:
@@ -111,11 +113,11 @@ for i in test_id:
 test_idx = torch.LongTensor(converted_test_id)
 
 
-# nolabel_idx = np.array([i for i in range(hgraph[labeled_class]['y'].shape[0])])
-# nolabel_idx = np.setdiff1d(nolabel_idx, train_idx.numpy(), True)
-# nolabel_idx = np.setdiff1d(nolabel_idx, val_idx.numpy(), True)
-# nolabel_idx = np.setdiff1d(nolabel_idx, test_idx.numpy(), True)
-# nolabel_idx = torch.LongTensor(nolabel_idx)
+nolabel_idx = np.array([i for i in range(hgraph[labeled_class]['y'].shape[0])])
+nolabel_idx = np.setdiff1d(nolabel_idx, train_idx.numpy(), True)
+nolabel_idx = np.setdiff1d(nolabel_idx, val_idx.numpy(), True)
+nolabel_idx = np.setdiff1d(nolabel_idx, test_idx.numpy(), True)
+nolabel_idx = torch.LongTensor(nolabel_idx)
 
 # C class balance parameter
 
