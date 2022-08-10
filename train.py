@@ -12,11 +12,11 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from torch_geometric.loader import NeighborLoader
+from torch_geometric.loader import NeighborLoader, HGTLoader
 import torch_geometric.transforms as T
 from sklearn.metrics import average_precision_score
 
-from model import RGCN, RGPRGNN, RGAT, Node_Transformation
+from model import RGCN, RGPRGNN, RGAT, Node_Transformation, HGT, ResRGCN
 import nni
 import wandb
 import random
@@ -28,7 +28,7 @@ parser.add_argument('--dataset', type=str, default='dataset/pyg_data/icdm2022_se
 parser.add_argument('--labeled-class', type=str, default='item')
 parser.add_argument("--batch_size", type=int, default=64,
                     help="Mini-batch size. If -1, use full graph training.")
-parser.add_argument("--model", choices=["RGCN", "RGPRGNN", "RGAT"], default="RGPRGNN")
+parser.add_argument("--model", choices=["RGCN", "RGPRGNN", "RGAT", "HGT", "ResRGCN"], default="RGPRGNN")
 parser.add_argument("--fanout", type=int, default=150,
                     help="Fan-out of neighbor sampling.")
 parser.add_argument("--n_layers", type=int, default=3,
@@ -51,20 +51,22 @@ parser.add_argument("--json-file", type=str, default="pyg_pred_session1.json")
 parser.add_argument("--inference", type=bool, default=False)
 # parser.add_argument("--record-file", type=str, default="record.txt")
 
+parser.add_argument("--dropedge", type=float, default=0.2)
+
 # pseudo label training
 parser.add_argument("--pseudo_positive", type=int, default=500)
 parser.add_argument("--pseudo_negative", type=int, default=2000)
-parser.add_argument("--pseudo", action='store_true', default=True)
+parser.add_argument("--pseudo", action='store_true', default=False)
 
 parser.add_argument("--pre_transform", action='store_true', default=False)
 parser.add_argument("--alpha", type=float, default=0.1)
 
 parser.add_argument("--lr", type=float, default=0.001)
-parser.add_argument("--device", type=str, default="cuda:1")
+parser.add_argument("--device", type=str, default="cuda")
 
 # grid search hyperparameters
 parser.add_argument("--nni", action='store_true', default=False)
-parser.add_argument("--wandb", action='store_true', default=False)
+parser.add_argument("--wandb", action='store_true', default=True)
 parser.add_argument("--debug", action='store_true', default=False)
 
 args = parser.parse_args()
@@ -154,6 +156,11 @@ def gen_dataloader(hgraph, labeled_class, idx, args, shuffle=False, balance=Fals
                                     num_neighbors=[args.fanout] * args.n_layers,
                                     shuffle=shuffle,
                                     batch_size=args.batch_size, num_workers=4)
+        # dataloader = HGTLoader(hgraph,
+        #                        input_nodes=(labeled_class, idx),
+        #                        num_samples=[500] * 5,
+        #                        shuffle=shuffle,
+        #                        batch_size=args.batch_size, num_workers=4)
     return dataloader
 
 
@@ -164,6 +171,8 @@ def gen_dataloader(hgraph, labeled_class, idx, args, shuffle=False, balance=Fals
 
 
 num_relations = len(hgraph.edge_types)
+print(f'num_relation: {num_relations}')
+# print(hgraph.metadata())
 
 if args.inference:
     model = torch.load(osp.join('best_model', args.model + ".pth"), map_location=args.device)
@@ -195,6 +204,26 @@ else:
                         n_layers=args.n_layers,
                         dropout=args.dropout,
                         pre_transform=args.pre_transform)
+    
+    elif args.model == 'HGT':
+        model = HGT(metadata=hgraph.metadata(),
+                    in_channels=args.h_dim if args.pre_transform else args.in_dim,
+                    hidden_channels=args.h_dim,
+                    out_channels=2,
+                    num_relations=num_relations,
+                    num_bases=args.n_bases,
+                    n_layers=args.n_layers,
+                    dropout=args.dropout,
+                    pre_transform=args.pre_transform)
+    
+    elif args.model == 'ResRGCN':
+        model = ResRGCN(in_channels=args.in_dim,
+                        hidden_channels=args.h_dim,
+                        out_channels=2,
+                        num_relations=num_relations,
+                        num_bases=args.n_bases,
+                        n_layers=args.n_layers,
+                        dropout=args.dropout)
     
     else:
         raise NotImplementedError
@@ -238,9 +267,29 @@ def train(epoch):
             item_id = batch._node_type_names.index(args.labeled_class)
             batch.x = node_transformation(batch.x.to(device), batch.node_type.to(device), item_id)
 
+
+        # if args.dropedge > 0:
+        #     num_edge = batch.edge_index.shape[1]
+        #     edge_indexes = [i for i in range(num_edge)]
+        #     select_edge_indexes = random.sample(edge_indexes, int(num_edge * (1 - args.dropedge)))
+        #     batch.edge_index = torch.index_select(batch.edge_index, 1, torch.tensor(select_edge_indexes))
+        #     batch.edge_type = torch.index_select(batch.edge_type, 0, torch.tensor(select_edge_indexes))
+
         y_hat = model(batch.x.to(device), 
                       batch.edge_index.to(device),
                       batch.edge_type.to(device))[start:start + batch_size]
+
+        # batch.x_dict = {
+        #     node_type: x.to(device)
+        #     for node_type, x in batch.x_dict.items()
+        # }
+        # batch.edge_index_dict = {
+        #     edge_type: edge_index.to(device)
+        #     for edge_type, edge_index in batch.edge_index_dict.items()
+        # }
+
+        # y_hat = model(batch.x_dict, batch.edge_index_dict)[:batch_size]
+
         loss = F.cross_entropy(y_hat, y)
         loss.backward()
         optimizer.step()
@@ -286,6 +335,18 @@ def val():
 
         y_hat = model(batch.x.to(device), batch.edge_index.to(device), batch.edge_type.to(device))[
                 start:start + batch_size]
+
+        # batch.x_dict = {
+        #     node_type: x.to(device)
+        #     for node_type, x in batch.x_dict.items()
+        # }
+        # batch.edge_index_dict = {
+        #     edge_type: edge_index.to(device)
+        #     for edge_type, edge_index in batch.edge_index_dict.items()
+        # }
+
+        # y_hat = model(batch.x_dict, batch.edge_index_dict)[:batch_size]
+
         loss = F.cross_entropy(y_hat, y)
         y_pred.append(F.softmax(y_hat, dim=1)[:, 1].detach().cpu())
         y_true.append(y.cpu())
@@ -373,6 +434,17 @@ def test():
             batch.x = node_transformation(batch.x.to(device), batch.node_type.to(device), item_id)
         y_hat = model(batch.x.to(device), batch.edge_index.to(device), batch.edge_type.to(device))[
                 start:start + batch_size]
+        # batch.x_dict = {
+        #     node_type: x.to(device)
+        #     for node_type, x in batch.x_dict.items()
+        # }
+        # batch.edge_index_dict = {
+        #     edge_type: edge_index.to(device)
+        #     for edge_type, edge_index in batch.edge_index_dict.items()
+        # }
+
+        # y_hat = model(batch.x_dict, batch.edge_index_dict)[:batch_size]
+
         pbar.update(batch_size)
         y_pred.append(F.softmax(y_hat, dim=1)[:, 1].detach().cpu())
     pbar.close()

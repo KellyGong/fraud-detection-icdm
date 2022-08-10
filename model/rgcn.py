@@ -1,4 +1,5 @@
 import torch
+from torch.nn import Linear
 import torch.nn.functional as F
 from torch_geometric.nn import RGCNConv
 
@@ -9,12 +10,14 @@ class RGCN(torch.nn.Module):
         self.convs = torch.nn.ModuleList()
         self.relu = F.relu
         self.dropout = dropout
+        self.lin1 = Linear(in_channels, hidden_channels)
         self.convs.append(RGCNConv(in_channels, hidden_channels, num_relations, num_bases=num_bases))
         for i in range(n_layers - 2):
             self.convs.append(RGCNConv(hidden_channels, hidden_channels, num_relations, num_bases=num_bases))
         self.convs.append(RGCNConv(hidden_channels, out_channels, num_relations, num_bases=num_bases))
 
     def forward(self, x, edge_index, edge_type):
+        x = self.lin1(x)
         for i, conv in enumerate(self.convs):
             x = conv(x, edge_index, edge_type)
             if i < len(self.convs) - 1:

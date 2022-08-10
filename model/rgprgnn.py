@@ -13,7 +13,7 @@ class RGPRGNN(torch.nn.Module):
         super().__init__()
         self.convs = torch.nn.ModuleList()
         for i in range(n_layers):
-            self.convs.append(RGCNConv(hidden_channels, hidden_channels, num_relations, num_bases=num_bases))
+            self.convs.append(RGCNConv(hidden_channels, hidden_channels, num_relations, num_bases=num_bases, aggr='mean'))
 
         self.pre_transform = pre_transform
         # GPRGNN
@@ -25,10 +25,10 @@ class RGPRGNN(torch.nn.Module):
         self.alpha = alpha
         self.dropout = dropout
 
-        TEMP = alpha*(1-alpha)**np.arange(K+1)
-        TEMP[-1] = (1-alpha)**K
+        TEMP = 1.0**np.arange(K+1)
+        # TEMP[-1] = (1-alpha)**K
 
-        self.temp = Parameter(torch.tensor(TEMP))
+        self.temp = Parameter(torch.Tensor(TEMP))
         self.reset_parameters()
 
         if activation == 'relu':
@@ -39,10 +39,15 @@ class RGPRGNN(torch.nn.Module):
             self.activation = F.elu
 
     def reset_parameters(self):
-        torch.nn.init.zeros_(self.temp)
-        for k in range(self.K+1):
-            self.temp.data[k] = self.alpha*(1-self.alpha)**k
-        self.temp.data[-1] = (1-self.alpha)**self.K
+        torch.nn.init.ones_(self.temp)
+        if self.alpha > 0.05:
+            for k in range(self.K+1):
+                self.temp.data[k] = self.alpha*(1-self.alpha)**k
+            self.temp.data[-1] = (1-self.alpha)**self.K
+        
+        else:
+            for k in range(self.K+1):
+                self.temp.data[k] = 1.0
 
     def forward(self, x, edge_index, edge_type):
         # x = self.lin1(x)
@@ -61,16 +66,15 @@ class RGPRGNN(torch.nn.Module):
             x = self.lin1(x)
             x = self.activation(x)
             x = F.dropout(x, p=self.dropout, training=self.training)
-        hidden = x*(self.temp[0])
-        x = hidden
+        hidden = x*(self.temp[0] / torch.sum(self.temp))
         for i, conv in enumerate(self.convs):
             x = conv(x, edge_index, edge_type)
             if i < len(self.convs) - 1:
                 x = self.activation(x)
                 x = F.dropout(x, p=self.dropout, training=self.training)
                 # x = x / torch.norm(x, dim=1, keepdim=True)
-                hidden = hidden + self.temp[i+1]*x
-        
+            hidden = hidden + (self.temp[i+1] / torch.sum(self.temp))*x
+
         # hidden = hidden / torch.norm(hidden, dim=1, keepdim=True)
         hidden = self.lin2(hidden)
         return hidden
