@@ -1,11 +1,17 @@
 program: train.py
-method: grid
+method: bayes
 metric:
   goal: maximize
   name: val_ap
 parameters:
   dropout:
-    values: [0.1, 0.3, 0.5]
-  activation:
-    values: [relu, leaklyrelu, elu]
+    values: [0.1, 0.2, 0.3]
+  batch_size:
+    values: [64, 128, 256]
+  n_bases:
+    values: [2, 4, 8]
+  alpha:
+    values: [0, 0.1, 0.3, 0.5]
+  lr:
+    values: [0.01, 0.005, 0.002, 0.001]
     
