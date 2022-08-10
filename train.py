@@ -26,7 +26,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str, default='dataset/pyg_data/icdm2022_session1.pt')
 # parser.add_argument('--dataset', type=str, default='dataset/pyg_data/icdm2022_session1_debug.pt')
 parser.add_argument('--labeled-class', type=str, default='item')
-parser.add_argument("--batch_size", type=int, default=64,
+parser.add_argument("--batch_size", type=int, default=256,
                     help="Mini-batch size. If -1, use full graph training.")
 parser.add_argument("--model", choices=["RGCN", "RGPRGNN", "RGAT", "HGT", "ResRGCN"], default="RGPRGNN")
 parser.add_argument("--fanout", type=int, default=150,
@@ -39,7 +39,7 @@ parser.add_argument("--in-dim", type=int, default=256,
                     help="number of hidden units")
 parser.add_argument("--n_bases", type=int, default=8,
                     help="number of filter weight matrices, default: -1 [use all]")
-parser.add_argument("--dropout", type=float, default=0.1)
+parser.add_argument("--dropout", type=float, default=0.3)
 parser.add_argument("--activation", choices=['relu', 'leaklyrelu', 'elu'], default='relu')
 parser.add_argument("--label_smoothing", type=float, default=0)
 
@@ -59,14 +59,14 @@ parser.add_argument("--pseudo_negative", type=int, default=2000)
 parser.add_argument("--pseudo", action='store_true', default=False)
 
 parser.add_argument("--pre_transform", action='store_true', default=False)
-parser.add_argument("--alpha", type=float, default=0.1)
+parser.add_argument("--alpha", type=float, default=0.5)
 
-parser.add_argument("--lr", type=float, default=0.001)
+parser.add_argument("--lr", type=float, default=0.002)
 parser.add_argument("--device", type=str, default="cuda")
 
 # grid search hyperparameters
 parser.add_argument("--nni", action='store_true', default=False)
-parser.add_argument("--wandb", action='store_true', default=True)
+parser.add_argument("--wandb", action='store_true', default=False)
 parser.add_argument("--debug", action='store_true', default=False)
 
 args = parser.parse_args()
@@ -111,6 +111,8 @@ for i in test_id:
     converted_test_id.append(hgraph['item'].maps[i])
  
 test_idx = torch.LongTensor(converted_test_id)
+
+all_id = set(torch.cat([train_idx, val_idx, test_idx]).tolist())
 
 
 # nolabel_idx = np.array([i for i in range(hgraph[labeled_class]['y'].shape[0])])
@@ -267,13 +269,16 @@ def train(epoch):
             item_id = batch._node_type_names.index(args.labeled_class)
             batch.x = node_transformation(batch.x.to(device), batch.node_type.to(device), item_id)
 
-
-        # if args.dropedge > 0:
-        #     num_edge = batch.edge_index.shape[1]
-        #     edge_indexes = [i for i in range(num_edge)]
-        #     select_edge_indexes = random.sample(edge_indexes, int(num_edge * (1 - args.dropedge)))
-        #     batch.edge_index = torch.index_select(batch.edge_index, 1, torch.tensor(select_edge_indexes))
-        #     batch.edge_type = torch.index_select(batch.edge_type, 0, torch.tensor(select_edge_indexes))
+        if args.dropedge > 0:
+            num_edge = batch.edge_index.shape[1]
+            edge_indexes = []
+            # keep the edges with labeled items
+            # for i in range(num_edge):
+            #     if int(batch.edge_index[0][i]) not in all_id and int(batch.edge_index[1][i] not in all_id):
+            #         edge_indexes.append(i)
+            select_edge_indexes = np.random.permutation(edge_indexes)[:int(num_edge * (1 - args.dropedge))]
+            batch.edge_index = torch.index_select(batch.edge_index, 1, torch.tensor(select_edge_indexes))
+            batch.edge_type = torch.index_select(batch.edge_type, 0, torch.tensor(select_edge_indexes))
 
         y_hat = model(batch.x.to(device), 
                       batch.edge_index.to(device),
