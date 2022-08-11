@@ -58,6 +58,11 @@ parser.add_argument("--pseudo_positive", type=int, default=500)
 parser.add_argument("--pseudo_negative", type=int, default=2000)
 parser.add_argument("--pseudo", action='store_true', default=False)
 
+# contrastive learning
+parser.add_argument("--cl", action='store_true', default=False)
+parser.add_argument("--cl_epoch", type=int, default=5)
+parser.add_argument("--cl_lr", type=float, default=0.001)
+
 parser.add_argument("--pre_transform", action='store_true', default=False)
 parser.add_argument("--alpha", type=float, default=0.5)
 
@@ -66,7 +71,7 @@ parser.add_argument("--device", type=str, default="cuda")
 
 # grid search hyperparameters
 parser.add_argument("--nni", action='store_true', default=False)
-parser.add_argument("--wandb", action='store_true', default=False)
+parser.add_argument("--wandb", action='store_true', default=True)
 parser.add_argument("--debug", action='store_true', default=False)
 
 args = parser.parse_args()
@@ -112,7 +117,7 @@ for i in test_id:
  
 test_idx = torch.LongTensor(converted_test_id)
 
-all_id = set(torch.cat([train_idx, val_idx, test_idx]).tolist())
+all_id = torch.cat([train_idx, val_idx, test_idx])
 
 
 # nolabel_idx = np.array([i for i in range(hgraph[labeled_class]['y'].shape[0])])
@@ -271,11 +276,10 @@ def train(epoch):
 
         if args.dropedge > 0:
             num_edge = batch.edge_index.shape[1]
-            edge_indexes = []
             # keep the edges with labeled items
-            # for i in range(num_edge):
-            #     if int(batch.edge_index[0][i]) not in all_id and int(batch.edge_index[1][i] not in all_id):
-            #         edge_indexes.append(i)
+            edge_index_in_labeled_item = torch.isin(batch.edge_index, all_id)
+            edge_index_in_labeled_item = (edge_index_in_labeled_item[0] | edge_index_in_labeled_item[1]).int().numpy()
+            edge_indexes = np.where(edge_index_in_labeled_item==0)[0]
             select_edge_indexes = np.random.permutation(edge_indexes)[:int(num_edge * (1 - args.dropedge))]
             batch.edge_index = torch.index_select(batch.edge_index, 1, torch.tensor(select_edge_indexes))
             batch.edge_type = torch.index_select(batch.edge_type, 0, torch.tensor(select_edge_indexes))
