@@ -49,7 +49,7 @@ class RGPRGNN(torch.nn.Module):
             for k in range(self.K+1):
                 self.temp.data[k] = 1.0
 
-    def forward(self, x, edge_index, edge_type):
+    def forward(self, x, edge_index, edge_type, cl=False):
         # x = self.lin1(x)
         # hidden = x*(self.temp[0])
         # x = hidden
@@ -76,5 +76,6 @@ class RGPRGNN(torch.nn.Module):
             hidden = hidden + (self.temp[i+1] / torch.sum(self.temp))*x
 
         # hidden = hidden / torch.norm(hidden, dim=1, keepdim=True)
-        hidden = self.lin2(hidden)
+        if not cl: 
+            hidden = self.lin2(hidden)
         return hidden
