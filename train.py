@@ -16,10 +16,14 @@ from torch_geometric.loader import NeighborLoader, HGTLoader
 import torch_geometric.transforms as T
 from sklearn.metrics import average_precision_score
 
-from model import RGCN, RGPRGNN, RGAT, Node_Transformation, HGT, ResRGCN
+from torch.nn import Linear
+from torch_geometric.nn import RGCNConv
+
+from model import RGCN, RGPRGNN, RGAT, Node_Transformation, HGT, ResRGCN, Post_Transformation
 import nni
 import wandb
 import random
+from info_nce import InfoNCE
 
 
 parser = argparse.ArgumentParser()
@@ -56,12 +60,14 @@ parser.add_argument("--dropedge", type=float, default=0.2)
 # pseudo label training
 parser.add_argument("--pseudo_positive", type=int, default=500)
 parser.add_argument("--pseudo_negative", type=int, default=2000)
-parser.add_argument("--pseudo", action='store_true', default=False)
+parser.add_argument("--pseudo", action='store_true', default=True)
 
 # contrastive learning
 parser.add_argument("--cl", action='store_true', default=False)
 parser.add_argument("--cl_epoch", type=int, default=5)
 parser.add_argument("--cl_lr", type=float, default=0.001)
+parser.add_argument("--cl_finetune_lr", type=float, default=0.001)
+parser.add_argument("--cl_batch", type=int, default=4096)
 
 parser.add_argument("--pre_transform", action='store_true', default=False)
 parser.add_argument("--alpha", type=float, default=0.5)
@@ -120,10 +126,10 @@ test_idx = torch.LongTensor(converted_test_id)
 all_id = torch.cat([train_idx, val_idx, test_idx])
 
 
-# nolabel_idx = np.array([i for i in range(hgraph[labeled_class]['y'].shape[0])])
-# nolabel_idx = np.setdiff1d(nolabel_idx, train_idx.numpy(), True)
-# nolabel_idx = np.setdiff1d(nolabel_idx, val_idx.numpy(), True)
-# nolabel_idx = np.setdiff1d(nolabel_idx, test_idx.numpy(), True)
+nolabel_idx = np.array(range(hgraph[labeled_class]['y'].shape[0]))
+nolabel_idx = np.setdiff1d(nolabel_idx, train_idx.numpy(), True)
+nolabel_idx = np.setdiff1d(nolabel_idx, val_idx.numpy(), True)
+nolabel_idx = np.setdiff1d(nolabel_idx, test_idx.numpy(), True)
 # nolabel_idx = torch.LongTensor(nolabel_idx)
 
 # C class balance parameter
@@ -244,6 +250,120 @@ else:
         optimizer = torch.optim.Adam(params, lr=args.lr)
     else:
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    
+    if args.cl:
+        post_transformation = Post_Transformation(args.h_dim, args.h_dim).to(device)
+        model_common_params = list(set(model.parameters()) - set(model.lin2.parameters()))
+        
+
+        cl_params = model_common_params + list(post_transformation.parameters())
+        cl_optimizer = torch.optim.Adam(cl_params, lr=args.cl_lr)
+
+        optimizer = torch.optim.Adam([{"params": list(model.lin2.parameters()), "lr": args.cl_finetune_lr}, 
+                                      {"params": model_common_params, "lr": args.cl_finetune_lr}])
+
+
+def augment(batch, augment_type='dropedge', drop_rate=0.2):
+    if augment_type == 'dropedge':
+        num_edge = batch.edge_index.shape[1]
+        # keep the edges with labeled items
+        # edge_index_in_labeled_item = torch.isin(batch.edge_index, all_id)
+        # edge_index_in_labeled_item = (edge_index_in_labeled_item[0] | edge_index_in_labeled_item[1]).int().numpy()
+        # edge_indexes = np.where(edge_index_in_labeled_item==0)[0]
+        edge_indexes = list(range(num_edge))
+        select_edge_indexes = np.random.permutation(edge_indexes)[:int(num_edge * (1 - drop_rate))]
+        batch.edge_index = torch.index_select(batch.edge_index, 1, torch.tensor(select_edge_indexes))
+        batch.edge_type = torch.index_select(batch.edge_type, 0, torch.tensor(select_edge_indexes))
+        return batch
+
+
+def contrastive():
+    for epoch in range(1, args.cl_epoch + 1):
+        contrastive_training(epoch)
+        contrastive_testing(epoch)
+
+
+@torch.no_grad()
+def contrastive_testing(epoch):
+    model.eval()
+    post_transformation.eval()
+    cl_loss = InfoNCE()
+    valid_loader = gen_dataloader(hgraph, labeled_class, val_idx, args, shuffle=False, balance=False)
+    pbar = tqdm(total=int(len(valid_loader.dataset)), ascii=True)
+    pbar.set_description(f'Epoch {epoch:02d}')
+    total_examples=total_loss=0
+    for batch in valid_loader:
+        cl_batch_size = min(args.cl_batch, batch[labeled_class].y.shape[0])
+        batch_size = batch[labeled_class].batch_size
+        y = batch[labeled_class].y[:batch_size].to(device)
+        start = 0
+        for ntype in batch.node_types:
+            if ntype == labeled_class:
+                break
+            start += batch[ntype].num_nodes
+
+        batch = batch.to_homogeneous()
+
+        batch_aug = augment(batch)
+        y_pretrain = model(batch.x.to(device), 
+                           batch.edge_index.to(device),
+                           batch.edge_type.to(device), cl=True)[start: start+cl_batch_size]
+        y_pretrain = post_transformation(y_pretrain)
+
+        y_pretrain_aug = model(batch_aug.x.to(device), 
+                               batch_aug.edge_index.to(device),
+                               batch_aug.edge_type.to(device), cl=True)[start: start+cl_batch_size]
+        y_pretrain_aug = post_transformation(y_pretrain_aug)
+
+        loss = cl_loss(y_pretrain, y_pretrain_aug)
+        pbar.update(batch_size)
+        total_examples += cl_batch_size
+        total_loss += float(loss) * cl_batch_size
+
+    print(f'epoch: {epoch:02d}, cl test loss: {total_loss / total_examples:.4f}')
+
+
+def contrastive_training(epoch):
+    model.train()
+    post_transformation.train()
+    cl_loss = InfoNCE()
+    sample_no_label_id = torch.tensor(np.random.permutation(nolabel_idx)[:int(train_idx.shape[0] * 3)])
+    train_loader = gen_dataloader(hgraph, labeled_class, torch.cat([train_idx, test_idx]), args, shuffle=True, balance=False)
+    pbar = tqdm(total=int(len(train_loader.dataset)), ascii=True)
+    pbar.set_description(f'Epoch {epoch:02d}')
+    total_examples=total_loss=0
+    for batch in train_loader:
+        cl_optimizer.zero_grad()
+        cl_batch_size = min(args.cl_batch, batch[labeled_class].y.shape[0])
+        batch_size = batch[labeled_class].batch_size
+        y = batch[labeled_class].y[:batch_size].to(device)
+        start = 0
+        for ntype in batch.node_types:
+            if ntype == labeled_class:
+                break
+            start += batch[ntype].num_nodes
+
+        batch = batch.to_homogeneous()
+
+        batch_aug = augment(batch)
+        y_pretrain = model(batch.x.to(device), 
+                           batch.edge_index.to(device),
+                           batch.edge_type.to(device), cl=True)[start: start+cl_batch_size]
+        y_pretrain = post_transformation(y_pretrain)
+
+        y_pretrain_aug = model(batch_aug.x.to(device), 
+                               batch_aug.edge_index.to(device),
+                               batch_aug.edge_type.to(device), cl=True)[start: start+cl_batch_size]
+        y_pretrain_aug = post_transformation(y_pretrain_aug)
+
+        loss = cl_loss(y_pretrain, y_pretrain_aug)
+        loss.backward()
+        cl_optimizer.step()
+        pbar.update(batch_size)
+        total_examples += cl_batch_size
+        total_loss += float(loss) * cl_batch_size
+
+    print(f'epoch: {epoch:02d}, cl train loss: {total_loss / total_examples:.4f}')
 
 
 def train(epoch):
@@ -274,15 +394,7 @@ def train(epoch):
             item_id = batch._node_type_names.index(args.labeled_class)
             batch.x = node_transformation(batch.x.to(device), batch.node_type.to(device), item_id)
 
-        if args.dropedge > 0:
-            num_edge = batch.edge_index.shape[1]
-            # keep the edges with labeled items
-            edge_index_in_labeled_item = torch.isin(batch.edge_index, all_id)
-            edge_index_in_labeled_item = (edge_index_in_labeled_item[0] | edge_index_in_labeled_item[1]).int().numpy()
-            edge_indexes = np.where(edge_index_in_labeled_item==0)[0]
-            select_edge_indexes = np.random.permutation(edge_indexes)[:int(num_edge * (1 - args.dropedge))]
-            batch.edge_index = torch.index_select(batch.edge_index, 1, torch.tensor(select_edge_indexes))
-            batch.edge_type = torch.index_select(batch.edge_type, 0, torch.tensor(select_edge_indexes))
+        batch = augment(batch)
 
         y_hat = model(batch.x.to(device), 
                       batch.edge_index.to(device),
@@ -421,6 +533,13 @@ def pseudo_label_gen():
     nolabel_idx = np.setdiff1d(nolabel_idx, iteration_top_normal_idx.numpy(), True)
     nolabel_idx = torch.LongTensor(nolabel_idx)
 
+    def weight_reset(m):
+        if isinstance(m, RGCNConv) or isinstance(m, Linear):
+            m.reset_parameters()
+
+    # model reset parameters
+    model.apply(weight_reset)
+
 
 @torch.no_grad()
 def test():
@@ -462,6 +581,11 @@ def test():
 
 
 if args.inference == False:
+
+    if args.cl:
+        print("Start contrastive training")
+        contrastive()
+    
     print("Start training")
     best_val_ap = 0
     earlystop = EarlyStop(interval=args.early_stopping)
@@ -500,9 +624,8 @@ if args.inference == False:
                 break
         
         # add pseudo label to the training set
-        if args.pseudo and epoch % 3 == 0:
+        if args.pseudo and epoch % 15 == 0:
             pseudo_label_gen()
-        
 
     print(f"Complete Training (best val_ap: {best_val_ap})")
 
