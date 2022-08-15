@@ -1,5 +1,4 @@
-parser.add_argument("--node_sample", type=int, default=80000)
-parser.add_argument("--edge_add", type=int, default=500000)
+
 ###################### add a new edge_type item-I-item based on feature distance
 def add_item_item_edge(hgraph, num_node2sample, num_edge2add, train_idx, val_idx, test_idx):
     start_time = time.time()
