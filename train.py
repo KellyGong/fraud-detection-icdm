@@ -25,6 +25,7 @@ import nni
 import wandb
 import random
 from info_nce import InfoNCE
+from losses import SupConLoss
 
 
 parser = argparse.ArgumentParser()
@@ -64,7 +65,9 @@ parser.add_argument("--pseudo_negative", type=int, default=2000)
 parser.add_argument("--pseudo", action='store_true', default=False)
 
 # contrastive learning
-parser.add_argument("--cl", action='store_true', default=False)
+parser.add_argument("--cl", action='store_true', default=True)
+parser.add_argument("--cl_supervised", action='store_true', default=False)
+parser.add_argument("--cl_joint_loss", action='store_true', default=True)
 parser.add_argument("--cl_epoch", type=int, default=5)
 parser.add_argument("--cl_lr", type=float, default=0.001)
 parser.add_argument("--cl_finetune_lr", type=float, default=0.001)
@@ -136,7 +139,7 @@ nolabel_idx = np.array(range(hgraph[labeled_class]['y'].shape[0]))
 nolabel_idx = np.setdiff1d(nolabel_idx, train_idx.numpy(), True)
 nolabel_idx = np.setdiff1d(nolabel_idx, val_idx.numpy(), True)
 nolabel_idx = np.setdiff1d(nolabel_idx, test_idx.numpy(), True)
-# nolabel_idx = torch.LongTensor(nolabel_idx)
+nolabel_idx = torch.LongTensor(nolabel_idx)
 
 # C class balance parameter
 
@@ -358,16 +361,18 @@ def contrastive_testing(epoch):
 def contrastive_training(epoch):
     model.train()
     post_transformation.train()
-    cl_loss = InfoNCE()
-    sample_no_label_id = torch.tensor(np.random.permutation(nolabel_idx)[:int(train_idx.shape[0] * 3)])
-    train_loader = gen_dataloader(hgraph, labeled_class, torch.cat([train_idx, test_idx]), args, shuffle=True, balance=False)
+    unsupervised_criterion = InfoNCE()
+    supervised_criterion = SupConLoss(temperature=0.1)
+    sample_no_label_id = torch.tensor(np.random.permutation(nolabel_idx.numpy())[:int(train_idx.shape[0] * 3)])
+    # train_loader = gen_dataloader(hgraph, labeled_class, torch.cat([train_idx, test_idx]), args, shuffle=True, balance=False)
+    train_loader = gen_dataloader(hgraph, labeled_class, train_idx, args, shuffle=True, balance=False)
     pbar = tqdm(total=int(len(train_loader.dataset)), ascii=True)
     pbar.set_description(f'Epoch {epoch:02d}')
     total_examples=total_loss=0
     for batch in train_loader:
         cl_optimizer.zero_grad()
-        cl_batch_size = min(args.cl_batch, batch[labeled_class].y.shape[0])
         batch_size = batch[labeled_class].batch_size
+        cl_batch_size = min(args.cl_batch, batch[labeled_class].y.shape[0] - batch_size)
         y = batch[labeled_class].y[:batch_size].to(device)
         start = 0
         for ntype in batch.node_types:
@@ -387,8 +392,18 @@ def contrastive_training(epoch):
                                batch_aug.edge_index.to(device),
                                batch_aug.edge_type.to(device), cl=True)[start: start+cl_batch_size]
         y_pretrain_aug = post_transformation(y_pretrain_aug)
-
-        loss = cl_loss(y_pretrain, y_pretrain_aug)
+        
+        
+        supervised_loss = supervised_criterion(torch.cat([y_pretrain[:batch_size].unsqueeze(1), y_pretrain_aug[:batch_size].unsqueeze(1)], dim=1), y)
+        unsupervised_loss = unsupervised_criterion(y_pretrain[batch_size: batch_size+cl_batch_size], y_pretrain_aug[batch_size: batch_size+cl_batch_size])
+        
+        if args.cl_joint_loss:
+            loss = supervised_loss + unsupervised_loss
+        elif args.cl_supervised:
+            loss = supervised_loss
+        else:
+            loss = unsupervised_loss
+        
         loss.backward()
         cl_optimizer.step()
         pbar.update(batch_size)
@@ -520,12 +535,13 @@ def pseudo_label_gen():
     global train_idx, nolabel_idx
 
     model.eval()
-    test_loader = gen_dataloader(hgraph, labeled_class, nolabel_idx, args, shuffle=True)
+    test_loader = gen_dataloader(hgraph, labeled_class, torch.cat([train_idx, val_idx, test_idx]), args, shuffle=True)
     pbar = tqdm(total=int(len(test_loader.dataset)), ascii=True)
     pbar.set_description(f'Generate Pseudo Label')
     y_pred = []
     for i, batch in enumerate(test_loader):
         batch_size = batch[labeled_class].batch_size
+        node_size = batch[labeled_class].num_nodes
         start = 0
         for ntype in batch.node_types:
             if ntype == labeled_class:
@@ -538,11 +554,11 @@ def pseudo_label_gen():
             batch.x = node_transformation(batch.x.to(device), batch.node_type.to(device))
 
         y_hat = model(batch.x.to(device), batch.edge_index.to(device), batch.edge_type.to(device))[
-                start:start + batch_size]
+                start + batch_size: start + node_size]
         pbar.update(batch_size)
         y_pred.append(F.softmax(y_hat, dim=1)[:, 1].detach().cpu())
-        if args.debug or i > 2000:
-            break
+        # if args.debug or i > 2000:
+        #     break
     pbar.close()
 
     y_pred_tensor = torch.cat(y_pred)
@@ -658,6 +674,7 @@ if args.inference == False:
         # add pseudo label to the training set
         if args.pseudo and epoch % 15 == 0:
             pseudo_label_gen()
+            earlystop = EarlyStop(interval=args.early_stopping)
 
     print(f"Complete Training (best val_ap: {best_val_ap})")
 
