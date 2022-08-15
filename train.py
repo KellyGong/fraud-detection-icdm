@@ -60,7 +60,7 @@ parser.add_argument("--dropedge", type=float, default=0.2)
 # pseudo label training
 parser.add_argument("--pseudo_positive", type=int, default=500)
 parser.add_argument("--pseudo_negative", type=int, default=2000)
-parser.add_argument("--pseudo", action='store_true', default=True)
+parser.add_argument("--pseudo", action='store_true', default=False)
 
 # contrastive learning
 parser.add_argument("--cl", action='store_true', default=False)
