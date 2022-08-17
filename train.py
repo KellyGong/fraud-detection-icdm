@@ -58,6 +58,7 @@ parser.add_argument("--inference", type=bool, default=False)
 # parser.add_argument("--record-file", type=str, default="record.txt")
 
 parser.add_argument("--dropedge", type=float, default=0.2)
+parser.add_argument("--drop_distance", action='store_true', default=False)
 
 # pseudo label training
 parser.add_argument("--pseudo_positive", type=int, default=500)
@@ -65,7 +66,7 @@ parser.add_argument("--pseudo_negative", type=int, default=2000)
 parser.add_argument("--pseudo", action='store_true', default=False)
 
 # contrastive learning
-parser.add_argument("--cl", action='store_true', default=True)
+parser.add_argument("--cl", action='store_true', default=False)
 parser.add_argument("--cl_supervised", action='store_true', default=False)
 parser.add_argument("--cl_joint_loss", action='store_true', default=True)
 parser.add_argument("--cl_epoch", type=int, default=5)
@@ -298,17 +299,29 @@ else:
                                       {"params": model_common_params, "lr": args.cl_finetune_lr}])
 
 
-def augment(batch, augment_type='dropedge', drop_rate=0.2):
+def augment(batch, augment_type='dropedge', drop_rate=0.2, similarity=True):
     if augment_type == 'dropedge':
-        num_edge = batch.edge_index.shape[1]
-        # keep the edges with labeled items
-        # edge_index_in_labeled_item = torch.isin(batch.edge_index, all_id)
-        # edge_index_in_labeled_item = (edge_index_in_labeled_item[0] | edge_index_in_labeled_item[1]).int().numpy()
-        # edge_indexes = np.where(edge_index_in_labeled_item==0)[0]
-        edge_indexes = list(range(num_edge))
-        select_edge_indexes = np.random.permutation(edge_indexes)[:int(num_edge * (1 - drop_rate))]
-        batch.edge_index = torch.index_select(batch.edge_index, 1, torch.tensor(select_edge_indexes))
-        batch.edge_type = torch.index_select(batch.edge_type, 0, torch.tensor(select_edge_indexes))
+        if not similarity:
+            num_edge = batch.edge_index.shape[1]
+            # keep the edges with labeled items
+            # edge_index_in_labeled_item = torch.isin(batch.edge_index, all_id)
+            # edge_index_in_labeled_item = (edge_index_in_labeled_item[0] | edge_index_in_labeled_item[1]).int().numpy()
+            # edge_indexes = np.where(edge_index_in_labeled_item==0)[0]
+            edge_indexes = list(range(num_edge))
+            select_edge_indexes = np.random.permutation(edge_indexes)[:int(num_edge * (1 - drop_rate))]
+            batch.edge_index = torch.index_select(batch.edge_index, 1, torch.tensor(select_edge_indexes))
+            batch.edge_type = torch.index_select(batch.edge_type, 0, torch.tensor(select_edge_indexes))
+        
+        else:
+            # norm_2_transform = T.Distance()
+            # batch = norm_2_transform(batch)
+            num_edge = batch.edge_index.shape[1]
+            x_1 = batch.x[batch.edge_index[0]]
+            x_2 = batch.x[batch.edge_index[1]]
+            edge_dis = torch.norm(x_1 - x_2, p=2, dim=1).numpy()
+            select_edge_indexes = np.argpartition(edge_dis, int(num_edge * (1 - drop_rate)))[:int(num_edge * (1 - drop_rate))]
+            batch.edge_index = torch.index_select(batch.edge_index, 1, torch.tensor(select_edge_indexes))
+            batch.edge_type = torch.index_select(batch.edge_type, 0, torch.tensor(select_edge_indexes))
         return batch
 
 
@@ -339,7 +352,7 @@ def contrastive_testing(epoch):
 
         batch = batch.to_homogeneous()
 
-        batch_aug = augment(batch)
+        batch_aug = augment(batch, similarity=args.drop_distance)
         y_pretrain = model(batch.x.to(device), 
                            batch.edge_index.to(device),
                            batch.edge_type.to(device), cl=True)[start: start+cl_batch_size]
@@ -382,7 +395,7 @@ def contrastive_training(epoch):
 
         batch = batch.to_homogeneous()
 
-        batch_aug = augment(batch)
+        batch_aug = augment(batch, similarity=args.drop_distance)
         y_pretrain = model(batch.x.to(device), 
                            batch.edge_index.to(device),
                            batch.edge_type.to(device), cl=True)[start: start+cl_batch_size]
@@ -441,7 +454,7 @@ def train(epoch):
             item_id = batch._node_type_names.index(args.labeled_class)
             batch.x = node_transformation(batch.x.to(device), batch.node_type.to(device), item_id)
 
-        batch = augment(batch)
+        batch = augment(batch, similarity=args.drop_distance)
 
         y_hat = model(batch.x.to(device), 
                       batch.edge_index.to(device),
