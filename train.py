@@ -71,7 +71,8 @@ parser.add_argument("--cl_supervised", action='store_true', default=False)
 parser.add_argument("--cl_joint_loss", action='store_true', default=True)
 parser.add_argument("--cl_epoch", type=int, default=5)
 parser.add_argument("--cl_lr", type=float, default=0.001)
-parser.add_argument("--cl_finetune_lr", type=float, default=0.001)
+parser.add_argument("--cl_finetune_lr", type=float, default=0.005)
+parser.add_argument("--cl_common_lr", type=float, default=0.001)
 parser.add_argument("--cl_batch", type=int, default=4096)
 
 # build item-item relation
@@ -296,7 +297,7 @@ else:
         cl_optimizer = torch.optim.Adam(cl_params, lr=args.cl_lr)
 
         optimizer = torch.optim.Adam([{"params": list(model.lin2.parameters()), "lr": args.cl_finetune_lr}, 
-                                      {"params": model_common_params, "lr": args.cl_finetune_lr}])
+                                      {"params": model_common_params, "lr": args.cl_common_lr}])
 
 
 def augment(batch, augment_type='dropedge', drop_rate=0.2, similarity=True):
@@ -548,10 +549,11 @@ def pseudo_label_gen():
     global train_idx, nolabel_idx
 
     model.eval()
-    test_loader = gen_dataloader(hgraph, labeled_class, torch.cat([train_idx, val_idx, test_idx]), args, shuffle=True)
+    test_loader = gen_dataloader(hgraph, labeled_class, torch.cat([train_idx, val_idx]), args, shuffle=True)
     pbar = tqdm(total=int(len(test_loader.dataset)), ascii=True)
     pbar.set_description(f'Generate Pseudo Label')
     y_pred = []
+    node_ids = []
     for i, batch in enumerate(test_loader):
         batch_size = batch[labeled_class].batch_size
         node_size = batch[labeled_class].num_nodes
@@ -570,19 +572,21 @@ def pseudo_label_gen():
                 start + batch_size: start + node_size]
         pbar.update(batch_size)
         y_pred.append(F.softmax(y_hat, dim=1)[:, 1].detach().cpu())
+        node_ids.append(batch.n_id[start + batch_size: start + node_size])
         # if args.debug or i > 2000:
         #     break
     pbar.close()
 
     y_pred_tensor = torch.cat(y_pred)
-    top_abnormal_pred, top_abnormal_indices = torch.sort(y_pred_tensor, descending=True)
-    top_abnormal_idx = batch.n_id[top_abnormal_indices]
+    item_id_tensor = torch.cat(node_ids)
+    _, top_abnormal_indices = torch.sort(y_pred_tensor, descending=True)
+    top_abnormal_idx = item_id_tensor[top_abnormal_indices]
 
-    top_normal_pred, top_normal_indices = torch.sort(y_pred_tensor, descending=False)
-    top_normal_idx = batch.n_id[top_normal_indices]
+    _, top_normal_indices = torch.sort(y_pred_tensor, descending=False)
+    top_normal_idx = item_id_tensor[top_normal_indices]
 
-    iteration_top_abnormal_idx = top_abnormal_idx[:args.pseudo_positive]
-    iteration_top_normal_idx = top_normal_idx[:args.pseudo_negative]
+    iteration_top_abnormal_idx = torch.unique(top_abnormal_idx[:args.pseudo_positive])
+    iteration_top_normal_idx = torch.unique(top_normal_idx[:args.pseudo_negative])
 
     # add new pseudo labels to graph for new training
     hgraph[labeled_class]['y'][iteration_top_abnormal_idx] = 1

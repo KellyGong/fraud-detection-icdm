@@ -1,4 +1,4 @@
-program: train.py
+program: train.py --cl
 method: bayes
 metric:
   goal: maximize
@@ -9,6 +9,8 @@ parameters:
   cl_epoch:
     values: [3, 5]
   cl_lr:
-    values: [0.001, 0.005]
+    values: [0.001, 0.002, 0.005]
   cl_finetune_lr:
-    values: [0.001, 0.005]
+    values: [0.001, 0.002, 0.005]
+  cl_common_lr:
+    values: [0.001, 0.002]
