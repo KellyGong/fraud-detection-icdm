@@ -77,7 +77,7 @@ parser.add_argument("--cl_common_lr", type=float, default=0.001)
 parser.add_argument("--cl_batch", type=int, default=4096)
 
 # build item-item relation through feature proximity and metapath (common neighbor b)
-parser.add_argument("--item_item", action='store_true', default=False)
+parser.add_argument("--item_item", action='store_true', default=True)
 parser.add_argument("--node_sample", type=int, default=80000)
 parser.add_argument("--edge_add", type=int, default=500000)
 parser.add_argument("--metapath", type=bool, default=True)
@@ -251,7 +251,7 @@ def add_metapath(batch):
     new_edge_index = torch.cat(new_edge_idx, dim=1)
     batch.edge_index = torch.cat([batch.edge_index, new_edge_index], dim=1)
     batch.edge_type = torch.cat([batch.edge_type, (torch.ones(new_edge_index.shape[1]) * (num_relations-1)).long()], dim=0)
-    return 
+    return batch
 
 num_relations = len(hgraph.edge_types)
 if args.metapath:
