@@ -21,7 +21,7 @@ from sklearn.metrics import average_precision_score
 from torch.nn import Linear
 from torch_geometric.nn import RGCNConv
 
-from model import RGCN, RGPRGNN, RGAT, Node_Transformation, HGT, ResRGCN, Post_Transformation
+from model import RGCN, RGPRGNN, RGAT, Node_Transformation, HGT, ResRGCN, Post_Transformation, RFILM
 import nni
 import wandb
 import random
@@ -35,7 +35,7 @@ parser.add_argument('--dataset', type=str, default='dataset/pyg_data/icdm2022_se
 parser.add_argument('--labeled-class', type=str, default='item')
 parser.add_argument("--batch_size", type=int, default=64,
                     help="Mini-batch size. If -1, use full graph training.")
-parser.add_argument("--model", choices=["RGCN", "RGPRGNN", "RGAT", "HGT", "ResRGCN"], default="RGPRGNN")
+parser.add_argument("--model", choices=["RGCN", "RGPRGNN", "RGAT", "HGT", "ResRGCN", "RFILM"], default="RGPRGNN")
 parser.add_argument("--fanout", type=int, default=150,
                     help="Fan-out of neighbor sampling.")
 parser.add_argument("--n_layers", type=int, default=3,
@@ -60,6 +60,7 @@ parser.add_argument("--inference", type=bool, default=False)
 
 parser.add_argument("--dropedge", type=float, default=0.2)
 parser.add_argument("--drop_distance", action='store_true', default=False)
+parser.add_argument("--balance", type=bool, default=False)
 
 # pseudo label training
 parser.add_argument("--pseudo_positive", type=int, default=500)
@@ -67,20 +68,20 @@ parser.add_argument("--pseudo_negative", type=int, default=2000)
 parser.add_argument("--pseudo", action='store_true', default=False)
 
 # contrastive learning
-parser.add_argument("--cl", action='store_true', default=False)
+parser.add_argument("--cl", action='store_true', default=True)
 parser.add_argument("--cl_supervised", action='store_true', default=False)
 parser.add_argument("--cl_joint_loss", action='store_true', default=True)
 parser.add_argument("--cl_epoch", type=int, default=5)
-parser.add_argument("--cl_lr", type=float, default=0.001)
+parser.add_argument("--cl_lr", type=float, default=0.002)
 parser.add_argument("--cl_finetune_lr", type=float, default=0.005)
-parser.add_argument("--cl_common_lr", type=float, default=0.001)
-parser.add_argument("--cl_batch", type=int, default=4096)
+parser.add_argument("--cl_common_lr", type=float, default=0.002)
+parser.add_argument("--cl_batch", type=int, default=2048)
 
 # build item-item relation through feature proximity and metapath (common neighbor b)
-parser.add_argument("--item_item", action='store_true', default=True)
+parser.add_argument("--item_item", action='store_true', default=False)
 parser.add_argument("--node_sample", type=int, default=80000)
 parser.add_argument("--edge_add", type=int, default=500000)
-parser.add_argument("--metapath", type=bool, default=True)
+parser.add_argument("--metapath", type=bool, default=False)
 parser.add_argument("--meta_fraction", type=float, default=0.1)
 
 parser.add_argument("--pre_transform", action='store_true', default=False)
@@ -290,6 +291,17 @@ else:
                         dropout=args.dropout,
                         pre_transform=args.pre_transform)
     
+    elif args.model == 'RFILM':
+        model = RFILM(in_channels=args.h_dim if args.pre_transform else args.in_dim,
+                        hidden_channels=args.h_dim,
+                        out_channels=2,
+                        num_relations=num_relations,
+                        num_bases=args.n_bases,
+                        alpha=args.alpha,
+                        n_layers=args.n_layers,
+                        dropout=args.dropout,
+                        pre_transform=args.pre_transform)
+    
     elif args.model == 'HGT':
         model = HGT(metadata=hgraph.metadata(),
                     in_channels=args.h_dim if args.pre_transform else args.in_dim,
@@ -309,6 +321,8 @@ else:
                         num_bases=args.n_bases,
                         n_layers=args.n_layers,
                         dropout=args.dropout)
+    
+    
     
     else:
         raise NotImplementedError
@@ -508,7 +522,10 @@ def train(epoch):
 
         # y_hat = model(batch.x_dict, batch.edge_index_dict)[:batch_size]
 
-        loss = F.cross_entropy(y_hat, y)
+        if args.balance:
+            loss = F.cross_entropy(y_hat, y, weight=class_balance_ratio)
+        else:
+            loss = F.cross_entropy(y_hat, y)
         loss.backward()
         optimizer.step()
         y_pred.append(F.softmax(y_hat, dim=1)[:, 1].detach().cpu())
