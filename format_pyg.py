@@ -50,10 +50,8 @@ def read_node_atts(node_file, pyg_file, label_file=None):
                     else:
                         node_embeds[node_type][node_id_v2] = np.array([x for x in info[2].split(":")], dtype=np.float32)
 
-                count += 1
-                if count % 300000 == 0:
-                    process.update(100000)
-                    break
+               
+                process.update(1)
 
         process.update(node_size % 100000)
         process.close()
@@ -166,25 +164,24 @@ def format_pyg_graph(edge_file, node_file, pyg_file, label_file=None):
             line = rf.readline()
             if line is None or len(line) == 0:
                 break
-            try:
-                line_info = line.strip().split(",")
-                process.update(1)
-                source_id, dest_id, source_type, dest_type, edge_type = line_info
-                source_id = graph[source_type].maps[int(source_id)]
-                dest_id = graph[dest_type].maps[int(dest_id)]
-                edges.setdefault(edge_type, {})
-                edges[edge_type].setdefault('source', []).append(int(source_id))
-                edges[edge_type].setdefault('dest', []).append(int(dest_id))
-                edges[edge_type].setdefault('source_type', source_type)
-                edges[edge_type].setdefault('dest_type', dest_type)
-                count += 1
-                # if count == 200000:
-                #     break
-                if count == 300000:
-                    break
+            
+            line_info = line.strip().split(",")
+            process.update(1)
+            source_id, dest_id, source_type, dest_type, edge_type = line_info
+            source_id = graph[source_type].maps[int(source_id)]
+            dest_id = graph[dest_type].maps[int(dest_id)]
+            edges.setdefault(edge_type, {})
+            edges[edge_type].setdefault('source', []).append(int(source_id))
+            edges[edge_type].setdefault('dest', []).append(int(dest_id))
+            edges[edge_type].setdefault('source_type', source_type)
+            edges[edge_type].setdefault('dest_type', dest_type)
+            count += 1
+            # if count == 200000:
+            #     break
+            # if count == 300000:
+            #     break
                 
-            except:
-                continue
+           
 
     process.update(edge_size % 100000)
     process.close()
@@ -232,10 +229,10 @@ def format_pyg_graph(edge_file, node_file, pyg_file, label_file=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--graph', type=str, default="dataset/icdm2022_session1_edges.csv")
-    parser.add_argument('--node', type=str, default="dataset/icdm2022_session1_nodes.csv")
+    parser.add_argument('--graph', type=str, default="dataset/icdm2022_session2_edges.csv")
+    parser.add_argument('--node', type=str, default="dataset/icdm2022_session2_nodes.csv")
     parser.add_argument('--label', type=str, default="dataset/icdm2022_session1_train_labels.csv")
-    parser.add_argument('--storefile', type=str, default="dataset/pyg_data/icdm2022_session1_debug")
+    parser.add_argument('--storefile', type=str, default="dataset/pyg_data/icdm2022_session2")
     parser.add_argument('--reload', type=bool, default=False, help="Whether node features should be reloaded")
     args = parser.parse_args()
     if "session2" in args.storefile:
@@ -245,5 +242,5 @@ if __name__ == "__main__":
         edge_size = 157814864
         node_size = 13806619
     if args.graph is not None and args.storefile is not None and args.node is not None:
-        format_pyg_graph(args.graph, args.node, args.storefile, args.label)
+        format_pyg_graph(args.graph, args.node, args.storefile, None)
         # read_node_atts(args.node, args.storefile, args.label)

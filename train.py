@@ -33,7 +33,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str, default='dataset/pyg_data/icdm2022_session1.pt')
 # parser.add_argument('--dataset', type=str, default='dataset/pyg_data/icdm2022_session1_debug.pt')
 parser.add_argument('--labeled-class', type=str, default='item')
-parser.add_argument("--batch_size", type=int, default=256,
+parser.add_argument("--batch_size", type=int, default=64,
                     help="Mini-batch size. If -1, use full graph training.")
 parser.add_argument("--model", choices=["RGCN", "RGPRGNN", "RGAT", "HGT", "ResRGCN"], default="RGPRGNN")
 parser.add_argument("--fanout", type=int, default=150,
@@ -46,7 +46,7 @@ parser.add_argument("--in-dim", type=int, default=256,
                     help="number of hidden units")
 parser.add_argument("--n_bases", type=int, default=8,
                     help="number of filter weight matrices, default: -1 [use all]")
-parser.add_argument("--dropout", type=float, default=0.3)
+parser.add_argument("--dropout", type=float, default=0.11632051142133946)
 parser.add_argument("--activation", choices=['relu', 'leaklyrelu', 'elu'], default='relu')
 parser.add_argument("--label_smoothing", type=float, default=0)
 
@@ -86,7 +86,7 @@ parser.add_argument("--meta_fraction", type=float, default=0.1)
 parser.add_argument("--pre_transform", action='store_true', default=False)
 parser.add_argument("--alpha", type=float, default=0.5)
 
-parser.add_argument("--lr", type=float, default=0.002)
+parser.add_argument("--lr", type=float, default=0.003171054577758051)
 parser.add_argument("--device", type=str, default="cuda")
 
 # grid search hyperparameters
