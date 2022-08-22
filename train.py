@@ -150,7 +150,7 @@ nolabel_idx = torch.LongTensor(nolabel_idx)
 # C class balance parameter
 
 C = len(np.where(hgraph[labeled_class]['y'].numpy() == 1)[0]) / len(np.where(hgraph[labeled_class]['y'].numpy() == 0)[0])
-class_balance_ratio = torch.tensor([1, C], device=device, requires_grad=False)
+class_balance_ratio = torch.tensor([C, 1], device=device, requires_grad=False)
 
 args.pseudo_negative = int(args.pseudo_positive / C)
 
@@ -403,9 +403,10 @@ def contrastive_testing(epoch):
         batch = batch.to_homogeneous()
 
         batch_aug = augment(batch, similarity=args.drop_distance)
-        y_pretrain = model(batch.x.to(device), 
-                           batch.edge_index.to(device),
-                           batch.edge_type.to(device), cl=True)[start: start+cl_batch_size]
+        batch_aug_2 = augment(batch, similarity=args.drop_distance)
+        y_pretrain = model(batch_aug_2.x.to(device), 
+                           batch_aug_2.edge_index.to(device),
+                           batch_aug_2.edge_type.to(device), cl=True)[start: start+cl_batch_size]
         y_pretrain = post_transformation(y_pretrain)
 
         y_pretrain_aug = model(batch_aug.x.to(device), 
