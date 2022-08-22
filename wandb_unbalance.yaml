@@ -14,3 +14,5 @@ parameters:
     distribution: uniform
     min: 0.001
     max: 0.005
+  balance:
+    values: [True, False]
