@@ -16,12 +16,12 @@ from itertools import permutations
 from torch_geometric.utils import to_undirected
 from torch_geometric.loader import NeighborLoader, HGTLoader
 import torch_geometric.transforms as T
-from sklearn.metrics import average_precision_score
+from sklearn.metrics import average_precision_score, confusion_matrix
 
 from torch.nn import Linear
 from torch_geometric.nn import RGCNConv
 
-from model import RGCN, RGPRGNN, RGAT, Node_Transformation, HGT, ResRGCN, Post_Transformation
+from model import RGCN, RGPRGNN, RGAT, Node_Transformation, HGT, ResRGCN, Post_Transformation, RFILM
 import nni
 import wandb
 import random
@@ -33,9 +33,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str, default='dataset/pyg_data/icdm2022_session1.pt')
 # parser.add_argument('--dataset', type=str, default='dataset/pyg_data/icdm2022_session1_debug.pt')
 parser.add_argument('--labeled-class', type=str, default='item')
-parser.add_argument("--batch_size", type=int, default=64,
+parser.add_argument("--batch_size", type=int, default=256,
                     help="Mini-batch size. If -1, use full graph training.")
-parser.add_argument("--model", choices=["RGCN", "RGPRGNN", "RGAT", "HGT", "ResRGCN"], default="RGPRGNN")
+parser.add_argument("--model", choices=["RGCN", "RGPRGNN", "RGAT", "HGT", "ResRGCN", "RFILM"], default="RGPRGNN")
 parser.add_argument("--fanout", type=int, default=150,
                     help="Fan-out of neighbor sampling.")
 parser.add_argument("--n_layers", type=int, default=3,
@@ -46,7 +46,7 @@ parser.add_argument("--in-dim", type=int, default=256,
                     help="number of hidden units")
 parser.add_argument("--n_bases", type=int, default=8,
                     help="number of filter weight matrices, default: -1 [use all]")
-parser.add_argument("--dropout", type=float, default=0.11632051142133946)
+parser.add_argument("--dropout", type=float, default=0.3)
 parser.add_argument("--activation", choices=['relu', 'leaklyrelu', 'elu'], default='relu')
 parser.add_argument("--label_smoothing", type=float, default=0)
 
@@ -61,32 +61,37 @@ parser.add_argument("--inference", type=bool, default=False)
 parser.add_argument("--dropedge", type=float, default=0.2)
 parser.add_argument("--drop_distance", action='store_true', default=False)
 
+# sample unbalance hyperparameter
+parser.add_argument("--balance", type=bool, default=True)
+parser.add_argument("--positive_weight", type=float, default=0.9)
+parser.add_argument("--val_positive_rate", type=float, default=0.0625)
+
 # pseudo label training
 parser.add_argument("--pseudo_positive", type=int, default=500)
 parser.add_argument("--pseudo_negative", type=int, default=2000)
 parser.add_argument("--pseudo", action='store_true', default=False)
 
 # contrastive learning
-parser.add_argument("--cl", action='store_true', default=False)
+parser.add_argument("--cl", action='store_true', default=True)
 parser.add_argument("--cl_supervised", action='store_true', default=False)
 parser.add_argument("--cl_joint_loss", action='store_true', default=True)
-parser.add_argument("--cl_epoch", type=int, default=5)
-parser.add_argument("--cl_lr", type=float, default=0.001)
+parser.add_argument("--cl_epoch", type=int, default=3)
+parser.add_argument("--cl_lr", type=float, default=0.002)
 parser.add_argument("--cl_finetune_lr", type=float, default=0.005)
-parser.add_argument("--cl_common_lr", type=float, default=0.001)
-parser.add_argument("--cl_batch", type=int, default=4096)
+parser.add_argument("--cl_common_lr", type=float, default=0.002)
+parser.add_argument("--cl_batch", type=int, default=2048)
 
 # build item-item relation through feature proximity and metapath (common neighbor b)
-parser.add_argument("--item_item", action='store_true', default=True)
+parser.add_argument("--item_item", action='store_true', default=False)
 parser.add_argument("--node_sample", type=int, default=80000)
 parser.add_argument("--edge_add", type=int, default=500000)
-parser.add_argument("--metapath", type=bool, default=True)
+parser.add_argument("--metapath", type=bool, default=False)
 parser.add_argument("--meta_fraction", type=float, default=0.1)
 
 parser.add_argument("--pre_transform", action='store_true', default=False)
 parser.add_argument("--alpha", type=float, default=0.5)
 
-parser.add_argument("--lr", type=float, default=0.003171054577758051)
+parser.add_argument("--lr", type=float, default=0.002)
 parser.add_argument("--device", type=str, default="cuda")
 
 # grid search hyperparameters
@@ -149,9 +154,22 @@ nolabel_idx = torch.LongTensor(nolabel_idx)
 # C class balance parameter
 
 C = len(np.where(hgraph[labeled_class]['y'].numpy() == 1)[0]) / len(np.where(hgraph[labeled_class]['y'].numpy() == 0)[0])
-class_balance_ratio = torch.tensor([1, C], device=device, requires_grad=False)
+class_balance_ratio = torch.tensor([1 - args.positive_weight, args.positive_weight], device=device, requires_grad=False)
 
-args.pseudo_negative = int(args.pseudo_positive / C)
+
+def refine_positive_rate(positive_ids, negative_ids, val_positive_rate=args.val_positive_rate, val_rate=0.2):
+    all_id_len = len(positive_ids) + len(negative_ids)
+    np.random.shuffle(positive_ids)
+    np.random.shuffle(negative_ids)
+    val_positive_len = int(all_id_len * val_rate * val_positive_rate)
+    val_negative_len = int(all_id_len * val_rate * (1 - val_positive_rate))
+    val_idx = torch.tensor(np.concatenate((positive_ids[:val_positive_len], negative_ids[:val_negative_len])))
+    train_idx = torch.tensor(np.concatenate((positive_ids[val_positive_len:], negative_ids[val_negative_len:])))
+    return train_idx, val_idx
+
+train_idx, val_idx = refine_positive_rate(np.where(hgraph[labeled_class]['y'].numpy() == 1)[0], np.where(hgraph[labeled_class]['y'].numpy() == 0)[0])
+
+# args.pseudo_negative = int(args.pseudo_positive / C)
 
 num_node_types = len(hgraph.node_types)
 
@@ -290,6 +308,17 @@ else:
                         dropout=args.dropout,
                         pre_transform=args.pre_transform)
     
+    elif args.model == 'RFILM':
+        model = RFILM(in_channels=args.h_dim if args.pre_transform else args.in_dim,
+                        hidden_channels=args.h_dim,
+                        out_channels=2,
+                        num_relations=num_relations,
+                        num_bases=args.n_bases,
+                        alpha=args.alpha,
+                        n_layers=args.n_layers,
+                        dropout=args.dropout,
+                        pre_transform=args.pre_transform)
+    
     elif args.model == 'HGT':
         model = HGT(metadata=hgraph.metadata(),
                     in_channels=args.h_dim if args.pre_transform else args.in_dim,
@@ -309,6 +338,8 @@ else:
                         num_bases=args.n_bases,
                         n_layers=args.n_layers,
                         dropout=args.dropout)
+    
+    
     
     else:
         raise NotImplementedError
@@ -389,9 +420,10 @@ def contrastive_testing(epoch):
         batch = batch.to_homogeneous()
 
         batch_aug = augment(batch, similarity=args.drop_distance)
-        y_pretrain = model(batch.x.to(device), 
-                           batch.edge_index.to(device),
-                           batch.edge_type.to(device), cl=True)[start: start+cl_batch_size]
+        batch_aug_2 = augment(batch, similarity=args.drop_distance)
+        y_pretrain = model(batch_aug_2.x.to(device), 
+                           batch_aug_2.edge_index.to(device),
+                           batch_aug_2.edge_type.to(device), cl=True)[start: start+cl_batch_size]
         y_pretrain = post_transformation(y_pretrain)
 
         y_pretrain_aug = model(batch_aug.x.to(device), 
@@ -508,7 +540,10 @@ def train(epoch):
 
         # y_hat = model(batch.x_dict, batch.edge_index_dict)[:batch_size]
 
-        loss = F.cross_entropy(y_hat, y)
+        if args.balance:
+            loss = F.cross_entropy(y_hat, y, weight=class_balance_ratio)
+        else:
+            loss = F.cross_entropy(y_hat, y)
         loss.backward()
         optimizer.step()
         y_pred.append(F.softmax(y_hat, dim=1)[:, 1].detach().cpu())
@@ -577,8 +612,9 @@ def val():
             break
     pbar.close()
     ap_score = average_precision_score(torch.hstack(y_true).numpy(), torch.hstack(y_pred).numpy())
+    confuse_matrix = confusion_matrix(torch.hstack(y_true).numpy(), torch.hstack(y_pred).numpy())
 
-    return total_loss / total_examples, total_correct / total_examples, ap_score
+    return total_loss / total_examples, total_correct / total_examples, ap_score, confuse_matrix
 
 
 @torch.no_grad()
@@ -692,13 +728,14 @@ if args.inference == False:
     
     print("Start training")
     best_val_ap = 0
+    best_confuse_matrix = None
     earlystop = EarlyStop(interval=args.early_stopping)
     for epoch in range(1, args.n_epoch + 1):
         train_loss, train_acc, train_ap = train(epoch)
         print(f'Train: Epoch {epoch:02d}, Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, AP_Score: {train_ap:.4f}')
 
         if args.validation:
-            val_loss, val_acc, val_ap = val()
+            val_loss, val_acc, val_ap, confuse_matrix = val()
             print(f'Val: Epoch: {epoch:02d}, Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, AP_Score: {val_ap:.4f}')
 
             # nni
@@ -720,6 +757,7 @@ if args.inference == False:
             # save model
             if val_ap > best_val_ap:
                 best_val_ap = val_ap
+                best_confuse_matrix = confuse_matrix
                 torch.save(model, model_path)
             
             # early stop
@@ -732,13 +770,15 @@ if args.inference == False:
             pseudo_label_gen()
             earlystop = EarlyStop(interval=args.early_stopping)
 
-    print(f"Complete Training (best val_ap: {best_val_ap})")
-
     if args.nni:
         nni.report_final_result(best_val_ap)
 
     if args.wandb:
         wandb.run.summary['best_val_ap'] = best_val_ap
+
+    print(f"Complete Training (best val_ap: {best_val_ap})")
+    print("best confuse matrix: ")
+    print(best_confuse_matrix)
 
 
 #    with open(args.record_file, 'a+') as f:
