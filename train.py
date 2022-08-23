@@ -72,7 +72,7 @@ parser.add_argument("--pseudo_negative", type=int, default=2000)
 parser.add_argument("--pseudo", action='store_true', default=False)
 
 # contrastive learning
-parser.add_argument("--cl", action='store_true', default=True)
+parser.add_argument("--cl", action='store_true', default=False)
 parser.add_argument("--cl_supervised", action='store_true', default=False)
 parser.add_argument("--cl_joint_loss", action='store_true', default=True)
 parser.add_argument("--cl_epoch", type=int, default=3)
@@ -568,6 +568,7 @@ def val():
     pbar.set_description(f'Epoch {epoch:02d}')
     total_loss = total_correct = total_examples = 0
     y_pred = []
+    y_pred_binary = []
     y_true = []
     for batch in val_loader:
         batch_size = batch[labeled_class].batch_size
@@ -604,6 +605,7 @@ def val():
         loss = F.cross_entropy(y_hat, y)
         y_pred.append(F.softmax(y_hat, dim=1)[:, 1].detach().cpu())
         y_true.append(y.cpu())
+        y_pred_binary.append(y_hat.argmax(dim=-1).detach().cpu())
         total_loss += float(loss) * batch_size
         total_correct += int((y_hat.argmax(dim=-1) == y).sum())
         total_examples += batch_size
@@ -612,7 +614,7 @@ def val():
             break
     pbar.close()
     ap_score = average_precision_score(torch.hstack(y_true).numpy(), torch.hstack(y_pred).numpy())
-    confuse_matrix = confusion_matrix(torch.hstack(y_true).numpy(), torch.hstack(y_pred).numpy())
+    confuse_matrix = confusion_matrix(torch.hstack(y_true).numpy(), torch.hstack(y_pred_binary).numpy())
 
     return total_loss / total_examples, total_correct / total_examples, ap_score, confuse_matrix
 
