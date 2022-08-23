@@ -1,18 +1,8 @@
 program: train.py
-method: bayes
+method: grid
 metric:
   goal: maximize
   name: val_ap
 parameters:
-  dropout:
-    distribution: uniform
-    min: 0.1
-    max: 0.3
-  batch_size:
-    values: [64, 128, 256, 512]
-  lr:
-    distribution: uniform
-    min: 0.001
-    max: 0.005
-  balance:
-    values: [True, False]
+  positive_weight:
+    values: [0.3, 0.5, 0.7, 0.9]
