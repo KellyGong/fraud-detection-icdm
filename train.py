@@ -63,7 +63,7 @@ parser.add_argument("--drop_distance", action='store_true', default=False)
 
 # sample unbalance hyperparameter
 parser.add_argument("--balance", type=bool, default=True)
-parser.add_argument("--positive_weight", type=float, default=0.9)
+parser.add_argument("--positive_weight", type=float, default=0.8)
 parser.add_argument("--val_positive_rate", type=float, default=0.0625)
 
 # pseudo label training
@@ -72,7 +72,7 @@ parser.add_argument("--pseudo_negative", type=int, default=2000)
 parser.add_argument("--pseudo", action='store_true', default=False)
 
 # contrastive learning
-parser.add_argument("--cl", action='store_true', default=False)
+parser.add_argument("--cl", action='store_true', default=True)
 parser.add_argument("--cl_supervised", action='store_true', default=False)
 parser.add_argument("--cl_joint_loss", action='store_true', default=True)
 parser.add_argument("--cl_epoch", type=int, default=3)
@@ -420,10 +420,10 @@ def contrastive_testing(epoch):
         batch = batch.to_homogeneous()
 
         batch_aug = augment(batch, similarity=args.drop_distance)
-        batch_aug_2 = augment(batch, similarity=args.drop_distance)
-        y_pretrain = model(batch_aug_2.x.to(device), 
-                           batch_aug_2.edge_index.to(device),
-                           batch_aug_2.edge_type.to(device), cl=True)[start: start+cl_batch_size]
+        batch = augment(batch, similarity=args.drop_distance)
+        y_pretrain = model(batch.x.to(device), 
+                           batch.edge_index.to(device),
+                           batch.edge_type.to(device), cl=True)[start: start+cl_batch_size]
         y_pretrain = post_transformation(y_pretrain)
 
         y_pretrain_aug = model(batch_aug.x.to(device), 
