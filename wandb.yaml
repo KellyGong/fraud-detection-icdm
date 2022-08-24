@@ -1,4 +1,4 @@
-program: train.py
+program: train_both.py
 method: bayes
 metric:
   goal: maximize
@@ -8,9 +8,8 @@ parameters:
     distribution: uniform
     min: 0.1
     max: 0.3
-  batch_size:
-    values: [64, 128, 256, 512]
-  lr:
+
+  cl_common_lr:
     distribution: uniform
     min: 0.001
     max: 0.005
