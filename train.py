@@ -62,7 +62,7 @@ parser.add_argument("--dropedge", type=float, default=0.2)
 parser.add_argument("--drop_distance", action='store_true', default=False)
 
 # sample unbalance hyperparameter
-parser.add_argument("--balance", type=bool, default=True)
+parser.add_argument("--balance", type=bool, default=False)
 parser.add_argument("--positive_weight", type=float, default=0.8)
 parser.add_argument("--val_positive_rate", type=float, default=0.0625)
 
@@ -167,7 +167,8 @@ def refine_positive_rate(positive_ids, negative_ids, val_positive_rate=args.val_
     train_idx = torch.tensor(np.concatenate((positive_ids[val_positive_len:], negative_ids[val_negative_len:])))
     return train_idx, val_idx
 
-train_idx, val_idx = refine_positive_rate(np.where(hgraph[labeled_class]['y'].numpy() == 1)[0], np.where(hgraph[labeled_class]['y'].numpy() == 0)[0])
+if args.balance:
+    train_idx, val_idx = refine_positive_rate(np.where(hgraph[labeled_class]['y'].numpy() == 1)[0], np.where(hgraph[labeled_class]['y'].numpy() == 0)[0])
 
 # args.pseudo_negative = int(args.pseudo_positive / C)
 

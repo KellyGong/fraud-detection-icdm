@@ -534,7 +534,7 @@ def contrastive_training(epoch):
 def train(epoch):
     model.train()
 
-    train_loader = gen_dataloader(hgraph, labeled_class, train_idx, args, shuffle=True, balance=True)
+    train_loader = gen_dataloader(hgraph, labeled_class, train_idx, args, shuffle=True, balance=False)
 
     pbar = tqdm(total=int(len(train_loader.dataset)), ascii=True)
     pbar.set_description(f'Epoch {epoch:02d}')
