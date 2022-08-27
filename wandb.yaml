@@ -1,5 +1,5 @@
 program: train.py
-method: bayes
+method: grid
 metric:
   goal: maximize
   name: val_ap
@@ -10,3 +10,5 @@ parameters:
     values: [0.005, 0.007, 0.003]
   batch_size:
     values: [64, 256, 128]
+  dropout:
+    values: [0.1, 0.2, 0.3]
