@@ -46,7 +46,7 @@ parser.add_argument("--in-dim", type=int, default=256,
                     help="number of hidden units")
 parser.add_argument("--n_bases", type=int, default=8,
                     help="number of filter weight matrices, default: -1 [use all]")
-parser.add_argument("--dropout", type=float, default=0.11632051142133946)
+parser.add_argument("--dropout", type=float, default=0.3)
 parser.add_argument("--activation", choices=['relu', 'leaklyrelu', 'elu'], default='relu')
 parser.add_argument("--label_smoothing", type=float, default=0)
 
@@ -58,6 +58,11 @@ parser.add_argument("--json-file", type=str, default="pyg_pred_session1.json")
 parser.add_argument("--inference", type=bool, default=False)
 # parser.add_argument("--record-file", type=str, default="record.txt")
 
+# sample unbalance hyperparameter
+parser.add_argument("--balance", type=bool, default=True)
+parser.add_argument("--positive_weight", type=float, default=0.8)
+parser.add_argument("--val_positive_rate", type=float, default=0.0625)
+
 parser.add_argument("--dropedge", type=float, default=0.2)
 parser.add_argument("--drop_distance", action='store_true', default=False)
 
@@ -67,27 +72,28 @@ parser.add_argument("--pseudo_negative", type=int, default=2000)
 parser.add_argument("--pseudo", action='store_true', default=False)
 
 # contrastive learning
-parser.add_argument("--cl", action='store_true', default=False)
+parser.add_argument("--cl", action='store_true', default=True)
 parser.add_argument("--cl_supervised", action='store_true', default=False)
 parser.add_argument("--cl_joint_loss", action='store_true', default=True)
-parser.add_argument("--cl_epoch", type=int, default=5)
-parser.add_argument("--cl_lr", type=float, default=0.001)
+parser.add_argument("--cl_epoch", type=int, default=3)
+parser.add_argument("--cl_lr", type=float, default=0.002)
 parser.add_argument("--cl_finetune_lr", type=float, default=0.005)
-parser.add_argument("--cl_common_lr", type=float, default=0.001)
-parser.add_argument("--cl_batch", type=int, default=4096)
+parser.add_argument("--cl_common_lr", type=float, default=0.002)
+parser.add_argument("--cl_batch", type=int, default=2048)
 
 # build item-item relation through feature proximity and metapath (common neighbor b)
 parser.add_argument("--item_item", action='store_true', default=False)
-parser.add_argument("--item_item_sepa", action='store_true', default=True)
+parser.add_argument("--item_item_sepa", action='store_true', default=False)
 parser.add_argument("--node_sample", type=int, default=80000)
 parser.add_argument("--edge_add", type=int, default=500000)
-parser.add_argument("--metapath", type=bool, default=True)
+
+parser.add_argument("--metapath", type=bool, default=False)
 parser.add_argument("--meta_fraction", type=float, default=0.1)
 
 parser.add_argument("--pre_transform", action='store_true', default=False)
 parser.add_argument("--alpha", type=float, default=0.5)
 
-parser.add_argument("--lr", type=float, default=0.003171054577758051)
+parser.add_argument("--lr", type=float, default=0.002)
 parser.add_argument("--device", type=str, default="cuda")
 
 # grid search hyperparameters
@@ -149,13 +155,27 @@ nolabel_idx = torch.LongTensor(nolabel_idx)
 # C class balance parameter
 
 C = len(np.where(hgraph[labeled_class]['y'].numpy() == 1)[0]) / len(np.where(hgraph[labeled_class]['y'].numpy() == 0)[0])
-class_balance_ratio = torch.tensor([1, C], device=device, requires_grad=False)
+class_balance_ratio = torch.tensor([1 - args.positive_weight, args.positive_weight], device=device, requires_grad=False)
 
 args.pseudo_negative = int(args.pseudo_positive / C)
+
+def refine_positive_rate(positive_ids, negative_ids, val_positive_rate=args.val_positive_rate, val_rate=0.2):
+    all_id_len = len(positive_ids) + len(negative_ids)
+    np.random.shuffle(positive_ids)
+    np.random.shuffle(negative_ids)
+    val_positive_len = int(all_id_len * val_rate * val_positive_rate)
+    val_negative_len = int(all_id_len * val_rate * (1 - val_positive_rate))
+    val_idx = torch.tensor(np.concatenate((positive_ids[:val_positive_len], negative_ids[:val_negative_len])))
+    train_idx = torch.tensor(np.concatenate((positive_ids[val_positive_len:], negative_ids[val_negative_len:])))
+    return train_idx, val_idx
+
+train_idx, val_idx = refine_positive_rate(np.where(hgraph[labeled_class]['y'].numpy() == 1)[0], np.where(hgraph[labeled_class]['y'].numpy() == 0)[0])
 
 num_node_types = len(hgraph.node_types)
 
 print(args)
+
+print(hgraph.edge_types)
 
 def gen_dataloader(hgraph, labeled_class, idx, args, shuffle=False, balance=False):
     if balance:
@@ -164,7 +184,7 @@ def gen_dataloader(hgraph, labeled_class, idx, args, shuffle=False, balance=Fals
         positive_indices = samples[np.in1d(samples, np.where(hgraph[labeled_class]['y'].numpy() == 1)[0])] 
         negative_indices = samples[np.in1d(samples, np.where(hgraph[labeled_class]['y'].numpy() == 0)[0])]  
 
-        negative_indices = np.random.choice(negative_indices, len(positive_indices))
+        negative_indices = np.random.choice(negative_indices, int(len(positive_indices) / args.val_positive_rate), replace=True)
         new_idx = np.concatenate([positive_indices, negative_indices])
         np.random.shuffle(new_idx)
         new_idx = torch.tensor(new_idx)
@@ -463,7 +483,7 @@ def contrastive_training(epoch):
     supervised_criterion = SupConLoss(temperature=0.1)
     sample_no_label_id = torch.tensor(np.random.permutation(nolabel_idx.numpy())[:int(train_idx.shape[0] * 3)])
     # train_loader = gen_dataloader(hgraph, labeled_class, torch.cat([train_idx, test_idx]), args, shuffle=True, balance=False)
-    train_loader = gen_dataloader(hgraph, labeled_class, train_idx, args, shuffle=True, balance=False)
+    train_loader = gen_dataloader(hgraph, labeled_class, torch.cat([train_idx, test_idx]), args, shuffle=True, balance=False)
     pbar = tqdm(total=int(len(train_loader.dataset)), ascii=True)
     pbar.set_description(f'Epoch {epoch:02d}')
     total_examples=total_loss=0

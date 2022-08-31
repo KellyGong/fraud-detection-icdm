@@ -26,7 +26,7 @@ import nni
 import wandb
 import random
 from info_nce import InfoNCE
-from losses import SupConLoss
+from losses import SupConLoss, focal_loss
 
 
 parser = argparse.ArgumentParser()
@@ -62,7 +62,8 @@ parser.add_argument("--dropedge", type=float, default=0.2)
 parser.add_argument("--drop_distance", action='store_true', default=False)
 
 # sample unbalance hyperparameter
-parser.add_argument("--balance", type=bool, default=True)
+parser.add_argument("--balance", type=bool, default=False)
+parser.add_argument("--focal", type=bool, default=False)
 parser.add_argument("--positive_weight", type=float, default=0.8)
 parser.add_argument("--val_positive_rate", type=float, default=0.0625)
 
@@ -167,7 +168,8 @@ def refine_positive_rate(positive_ids, negative_ids, val_positive_rate=args.val_
     train_idx = torch.tensor(np.concatenate((positive_ids[val_positive_len:], negative_ids[val_negative_len:])))
     return train_idx, val_idx
 
-train_idx, val_idx = refine_positive_rate(np.where(hgraph[labeled_class]['y'].numpy() == 1)[0], np.where(hgraph[labeled_class]['y'].numpy() == 0)[0])
+if args.balance:
+    train_idx, val_idx = refine_positive_rate(np.where(hgraph[labeled_class]['y'].numpy() == 1)[0], np.where(hgraph[labeled_class]['y'].numpy() == 0)[0])
 
 # args.pseudo_negative = int(args.pseudo_positive / C)
 
@@ -501,7 +503,7 @@ def train(epoch):
 
     pbar = tqdm(total=int(len(train_loader.dataset)), ascii=True)
     pbar.set_description(f'Epoch {epoch:02d}')
-
+    loss_fn = focal_loss(num_classes=2)
     total_loss = total_correct = total_examples = 0
     y_pred = []
     y_true = []
@@ -542,8 +544,12 @@ def train(epoch):
 
         if args.balance:
             loss = F.cross_entropy(y_hat, y, weight=class_balance_ratio)
+        if args.focal:
+            loss = loss_fn(y_hat, y)
         else:
             loss = F.cross_entropy(y_hat, y)
+        
+        loss = loss_fn(y_hat, y)
         loss.backward()
         optimizer.step()
         y_pred.append(F.softmax(y_hat, dim=1)[:, 1].detach().cpu())
@@ -782,6 +788,9 @@ if args.inference == False:
     print("best confuse matrix: ")
     print(best_confuse_matrix)
 
+    print(model.convs[0].temp.data.detach().cpu().numpy())
+    print(model.convs[1].temp.data.detach().cpu().numpy())
+    print(model.convs[2].temp.data.detach().cpu().numpy())
 
 #    with open(args.record_file, 'a+') as f:
 #        f.write(f"{args.model_id:2d} {args.h_dim:3d} {args.n_layers:2d} {args.lr:.4f} {end:02d} {float(val_ap_list[-1]):.4f} {np.argmax(val_ap_list)+5:02d} {float(np.max(val_ap_list)):.4f}\n")

@@ -64,8 +64,8 @@ args = parser.parse_args()
 # model_id = random.randint(0, 100000)
 # model_path = osp.join('best_model', args.model + "_" + str(model_id) + ".pth")
 
-model_path = 'best_model/RGPRGNN_16093_val_0.944.pth'
-model_id = '16093'
+model_path = 'best_model/RGPRGNN_7235.pth'
+model_id = '7235'
 
 print(model_path)
 

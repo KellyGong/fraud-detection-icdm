@@ -6,6 +6,7 @@ from torch.nn import Linear, Parameter
 from torch_geometric.nn import MessagePassing
 from torch_geometric.nn.conv.gcn_conv import gcn_norm
 from torch_geometric.nn import RGCNConv
+from torch_geometric.nn.conv.rgcn_conv import RGCNConv_weight
 
 
 class RGPRGNN(torch.nn.Module):
@@ -13,7 +14,7 @@ class RGPRGNN(torch.nn.Module):
         super().__init__()
         self.convs = torch.nn.ModuleList()
         for i in range(n_layers):
-            self.convs.append(RGCNConv(hidden_channels, hidden_channels, num_relations, num_bases=num_bases, aggr='mean'))
+            self.convs.append(RGCNConv_weight(hidden_channels, hidden_channels, num_relations, num_bases=num_bases, aggr='mean'))
 
         self.pre_transform = pre_transform
         # GPRGNN
@@ -79,3 +80,6 @@ class RGPRGNN(torch.nn.Module):
         if not cl: 
             hidden = self.lin2(hidden)
         return hidden
+
+
+
