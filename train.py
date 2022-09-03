@@ -46,7 +46,7 @@ parser.add_argument("--in-dim", type=int, default=256,
                     help="number of hidden units")
 parser.add_argument("--n_bases", type=int, default=8,
                     help="number of filter weight matrices, default: -1 [use all]")
-parser.add_argument("--dropout", type=float, default=0.3)
+parser.add_argument("--dropout", type=float, default=0.2)
 parser.add_argument("--activation", choices=['relu', 'leaklyrelu', 'elu'], default='relu')
 parser.add_argument("--label_smoothing", type=float, default=0)
 
