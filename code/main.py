@@ -116,8 +116,7 @@ if args.wandb:
                config=vars(args))
     args = argparse.Namespace(**wandb.config)
 
-model_id = random.randint(0, 100000)
-model_path = args.model + "_" + str(model_id) + ".pth"
+model_path = args.model + "_" + str(args.model_id) + ".pth"
 
 print(model_path)
 
@@ -553,7 +552,6 @@ def train(epoch):
         else:
             loss = F.cross_entropy(y_hat, y)
         
-        loss = loss_fn(y_hat, y)
         loss.backward()
         optimizer.step()
         y_pred.append(F.softmax(y_hat, dim=1)[:, 1].detach().cpu())
