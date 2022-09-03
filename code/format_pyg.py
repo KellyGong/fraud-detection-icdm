@@ -8,20 +8,20 @@ from tqdm import tqdm
 import os.path as osp
 import pickle as pkl
 
-# edge_size = 0
-# node_size = 0
+edge_size = 0
+node_size = 0
 
 
-def read_node_atts_both(node_file1, node_file2, pyg_file, label_file=None):
+def read_node_atts(node_file, pyg_file, label_file=None):
     node_maps = {}
     node_embeds = {}
     count = 0
     lack_num = {}
-    node_counts = node_size1 + node_size2
+    node_counts = node_size
     if osp.exists(pyg_file + ".nodes.pyg") == False:
         print("Start loading node information")
         process = tqdm(total=node_counts)
-        with open(node_file1, 'r') as rf:
+        with open(node_file, 'r') as rf:
             while True:
                 line = rf.readline()
                 if line is None or len(line) == 0:
@@ -51,42 +51,9 @@ def read_node_atts_both(node_file1, node_file2, pyg_file, label_file=None):
                         node_embeds[node_type][node_id_v2] = np.array([x for x in info[2].split(":")], dtype=np.float32)
 
                
-                count += 1
                 process.update(1)
 
-        with open(node_file2, 'r') as rf:
-            while True:
-                line = rf.readline()
-                if line is None or len(line) == 0:
-                    break
-                info = line.strip().split(",")
-
-                node_id = int(info[0]) + node_size1
-                node_type = info[1].strip()
-
-                # node_maps.setdefault(node_type, {})
-                node_id_v2 = len(node_maps[node_type])
-                node_maps[node_type][node_id] = node_id_v2
-
-                # node_embeds.setdefault(node_type, {})
-                # lack_num.setdefault(node_type, 0)
-                if node_type == 'item':
-                    if len(info[2]) < 50:
-                        node_embeds[node_type][node_id_v2] = np.zeros(256, dtype=np.float32)
-                        lack_num[node_type] += 1
-                    else:
-                        node_embeds[node_type][node_id_v2] = np.array([x for x in info[2].split(":")], dtype=np.float32)
-                else:
-                    if len(info[2]) < 50:
-                        node_embeds[node_type][node_id_v2] = np.zeros(256, dtype=np.float32)
-                        lack_num[node_type] += 1
-                    else:
-                        node_embeds[node_type][node_id_v2] = np.array([x for x in info[2].split(":")], dtype=np.float32)
-
-                count += 1
-                process.update(1)
-
-        process.update(node_counts % 100000)
+        process.update(node_size % 100000)
         process.close()
         print("Complete loading node information\n")
 
@@ -127,8 +94,7 @@ def read_node_atts_both(node_file1, node_file2, pyg_file, label_file=None):
     print("Start converting into pyg data")
     for node_type in tqdm(node_embeds, desc="Node features, numbers and mapping"):
         graph[node_type].x = torch.empty(len(node_maps[node_type]), 256)
-        # for nid, embedding in tqdm(node_embeds[node_type].items()):
-        for nid, embedding in node_embeds[node_type].items():
+        for nid, embedding in tqdm(node_embeds[node_type].items()):
             graph[node_type].x[nid] = torch.from_numpy(embedding)
         graph[node_type].num_nodes = len(node_maps[node_type])
         graph[node_type].maps = node_maps[node_type]
@@ -156,28 +122,27 @@ def read_node_atts_both(node_file1, node_file2, pyg_file, label_file=None):
     return graph
 
 
-def format_pyg_graph_both(edge_file1, edge_file2, node_file1, node_file2, pyg_file, label_file=None):
+def format_pyg_graph(edge_file, node_file, pyg_file, label_file=None):
     if osp.exists(pyg_file + ".pt") and args.reload == False:
 #        graph = torch.load(pyg_file + ".pt")
         print("PyG graph of " + ("session2" if "session2" in pyg_file else "session1") + " has generated")
         return 0
     else:
         print("##########################################")
-        print("### Start generating PyG graph of session1 and session2")
+        print("### Start generating PyG graph of " + ("session2" if "session2" in args.storefile else "session1"))
         print("##########################################\n")
-        graph = read_node_atts_both(node_file1, node_file2, pyg_file, label_file)
+        graph = read_node_atts(node_file, pyg_file, label_file)
 
     print("Start loading edge information")
-    process = tqdm(total=edge_size1+edge_size2)
+    process = tqdm(total=edge_size)
     edges = {}
     count = 0
-    with open(edge_file1, 'r') as rf:
+    with open(edge_file, 'r') as rf:
         while True:
             line = rf.readline()
             if line is None or len(line) == 0:
                 break
             line_info = line.strip().split(",")
-            process.update(1)
             source_id, dest_id, source_type, dest_type, edge_type = line_info
             source_id = graph[source_type].maps[int(source_id)]
             dest_id = graph[dest_type].maps[int(dest_id)]
@@ -187,23 +152,10 @@ def format_pyg_graph_both(edge_file1, edge_file2, node_file1, node_file2, pyg_fi
             edges[edge_type].setdefault('source_type', source_type)
             edges[edge_type].setdefault('dest_type', dest_type)
             count += 1
-    with open(edge_file2, 'r') as rf:
-        while True:
-            line = rf.readline()
-            if line is None or len(line) == 0:
-                break
-            line_info = line.strip().split(",")
-            process.update(1)
-            source_id, dest_id, source_type, dest_type, edge_type = line_info
-            source_id = graph[source_type].maps[int(source_id)+node_size1]
-            dest_id = graph[dest_type].maps[int(dest_id)+node_size1]
-            # edges.setdefault(edge_type, {})
-            edges[edge_type].setdefault('source', []).append(int(source_id))
-            edges[edge_type].setdefault('dest', []).append(int(dest_id))
-            edges[edge_type].setdefault('source_type', source_type)
-            edges[edge_type].setdefault('dest_type', dest_type)
-            count += 1
-    process.update((edge_size1+edge_size2) % 100000)
+            if count % 100000 == 0:
+                process.update(100000)
+
+    process.update(edge_size % 100000)
     process.close()
     print(f'Edge Count: {str(count)}')
     print('Complete loading edge information\n')
@@ -249,19 +201,18 @@ def format_pyg_graph_both(edge_file1, edge_file2, node_file1, node_file2, pyg_fi
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--graph1', type=str, default="dataset/icdm2022_session1_edges.csv")
-    parser.add_argument('--node1', type=str, default="dataset/icdm2022_session1_nodes.csv")
-    parser.add_argument('--graph2', type=str, default="dataset/icdm2022_session2_edges.csv")
-    parser.add_argument('--node2', type=str, default="dataset/icdm2022_session2_nodes.csv")
-    parser.add_argument('--label', type=str, default="dataset/icdm2022_session1_train_labels.csv")
-    parser.add_argument('--storefile', type=str, default="dataset/pyg_data/icdm2022_session_both")
+    parser.add_argument('--graph', type=str, default="../data/icdm2022_session2_edges.csv")
+    parser.add_argument('--node', type=str, default="../data/icdm2022_session2_nodes.csv")
+    parser.add_argument('--label', type=str, default=None)
+    parser.add_argument('--storefile', type=str, default="../data/pyg_data/icdm2022_session2")
     parser.add_argument('--reload', type=bool, default=False, help="Whether node features should be reloaded")
     args = parser.parse_args()
-    edge_size2 = 120691444
-    node_size2 = 10284026
-
-    edge_size1 = 157814864
-    node_size1 = 13806619
-    if args.graph1 is not None and args.graph2 is not None and args.storefile is not None and args.node1 is not None and args.node2 is not None:
-        format_pyg_graph_both(args.graph1, args.graph2, args.node1, args.node2, args.storefile, args.label)
+    if "session2" in args.storefile:
+        edge_size = 120691444
+        node_size = 10284026
+    else:
+        edge_size = 157814864
+        node_size = 13806619
+    if args.graph is not None and args.storefile is not None and args.node is not None:
+        format_pyg_graph(args.graph, args.node, args.storefile, args.label)
         # read_node_atts(args.node, args.storefile, args.label)

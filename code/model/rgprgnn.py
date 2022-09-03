@@ -17,7 +17,6 @@ class RGPRGNN(torch.nn.Module):
             self.convs.append(RGCNConv_weight(hidden_channels, hidden_channels, num_relations, num_bases=num_bases, aggr='mean'))
 
         self.pre_transform = pre_transform
-        # GPRGNN
         if not self.pre_transform:
             self.lin1 = Linear(in_channels, hidden_channels)
         self.lin2 = Linear(hidden_channels, out_channels)
@@ -27,7 +26,6 @@ class RGPRGNN(torch.nn.Module):
         self.dropout = dropout
 
         TEMP = 1.0**np.arange(K+1)
-        # TEMP[-1] = (1-alpha)**K
 
         self.temp = Parameter(torch.Tensor(TEMP))
         self.reset_parameters()
@@ -51,18 +49,6 @@ class RGPRGNN(torch.nn.Module):
                 self.temp.data[k] = 1.0
 
     def forward(self, x, edge_index, edge_type, cl=False):
-        # x = self.lin1(x)
-        # hidden = x*(self.temp[0])
-        # x = hidden
-        # for i, conv in enumerate(self.convs):
-        #     x = conv(x, edge_index, edge_type)
-        #     if i < len(self.convs) - 1:
-        #         x = x.relu_()
-        #         x = F.dropout(x, p=0.4, training=self.training)
-        #     hidden = hidden + self.temp[i+1]*x
-        
-        # hidden = self.lin2(hidden)
-
         if not self.pre_transform:
             x = self.lin1(x)
             x = self.activation(x)
@@ -73,10 +59,8 @@ class RGPRGNN(torch.nn.Module):
             if i < len(self.convs) - 1:
                 x = self.activation(x)
                 x = F.dropout(x, p=self.dropout, training=self.training)
-                # x = x / torch.norm(x, dim=1, keepdim=True)
             hidden = hidden + (self.temp[i+1] / torch.sum(self.temp))*x
 
-        # hidden = hidden / torch.norm(hidden, dim=1, keepdim=True)
         if not cl: 
             hidden = self.lin2(hidden)
         return hidden

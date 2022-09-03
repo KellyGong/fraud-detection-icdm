@@ -2,6 +2,7 @@ dataset/
 best_model/
 best_result/
 wandb/
+data/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

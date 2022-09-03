@@ -5,6 +5,7 @@ import argparse
 import json
 from tabnanny import verbose
 import time
+import datetime
 
 from utils import EarlyStop, setup_seed
 
@@ -31,7 +32,6 @@ from losses import SupConLoss, focal_loss
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str, default='dataset/pyg_data/icdm2022_session1.pt')
-# parser.add_argument('--dataset', type=str, default='dataset/pyg_data/icdm2022_session1_debug.pt')
 parser.add_argument('--labeled-class', type=str, default='item')
 parser.add_argument("--batch_size", type=int, default=256,
                     help="Mini-batch size. If -1, use full graph training.")
@@ -53,7 +53,7 @@ parser.add_argument("--label_smoothing", type=float, default=0)
 parser.add_argument("--validation", type=bool, default=True)
 parser.add_argument("--early_stopping", type=int, default=10)
 parser.add_argument("--n-epoch", type=int, default=100)
-parser.add_argument("--test-file", type=str, default="dataset/icdm2022_session1_test_ids.txt")
+parser.add_argument("--test-file", type=str, default=None)
 parser.add_argument("--json-file", type=str, default="pyg_pred_session1.json")
 parser.add_argument("--inference", type=bool, default=False)
 # parser.add_argument("--record-file", type=str, default="record.txt")
@@ -94,6 +94,7 @@ parser.add_argument("--alpha", type=float, default=0.5)
 
 parser.add_argument("--lr", type=float, default=0.002)
 parser.add_argument("--device", type=str, default="cuda")
+parser.add_argument("--model_id", type=int, default=1)
 
 # grid search hyperparameters
 parser.add_argument("--nni", action='store_true', default=False)
@@ -116,7 +117,7 @@ if args.wandb:
     args = argparse.Namespace(**wandb.config)
 
 model_id = random.randint(0, 100000)
-model_path = osp.join('best_model', args.model + "_" + str(model_id) + ".pth")
+model_path = args.model + "_" + str(model_id) + ".pth"
 
 print(model_path)
 
@@ -227,19 +228,20 @@ def add_item_item_edge(hgraph, num_node2sample, num_edge2add, train_idx, val_idx
     val_sample_idx = val_idx[np.random.choice(len(val_idx), int(val_p*num_node2sample), replace=False)]
     test_sample_idx = test_idx[np.random.choice(len(test_idx), int(test_p*num_node2sample), replace=False)]
     all_sample_idx = torch.cat([train_sample_idx, val_sample_idx, test_sample_idx])
+    # distance
     dist = torch.cdist(hgraph['item'].x[all_sample_idx], hgraph['item'].x[all_sample_idx])
-    # dist.fill_diagonal_(-1) # remove diagonal
     dist[torch.triu(dist, diagonal=1)==0] = -1 # remove lower triangle
     dist[dist==0] = -1 # remove nodes that have all 0 feature
+
+    # select top similar node pair 
     dist = np.array(dist)
-    # dist[np.where(dist==0)] = -1 # remove nodes that have all 0 feature
     off_diag_ind = dist!=-1
     off_diag = dist[off_diag_ind]
-    threshold = np.partition(off_diag, num_edge2add//2)[:num_edge2add//2].max()
+    threshold = np.partition(off_diag, num_edge2add // 2)[:num_edge2add//2].max()
     edge2add_idx = np.where((dist<=threshold) & off_diag_ind)
+
+    # add new relation "item-item" to the selected node pairs
     sources, targets = all_sample_idx[edge2add_idx[0]], all_sample_idx[edge2add_idx[1]]
-    # sources = torch.cat([sources, targets])
-    # targets = torch.cat([targets, sources])
     hgraph['item', 'I', 'item'].edge_index = torch.vstack([torch.cat([sources, targets]), torch.cat([targets, sources])])
     print("It took {} minutes to add {} edges among {} nodes".format((time.time() - start_time)/60, hgraph['item', 'I', 'item'].edge_index.shape[1], torch.numel(all_sample_idx)))
     return hgraph
@@ -382,8 +384,6 @@ def augment(batch, augment_type='dropedge', drop_rate=0.2, similarity=True):
             batch.edge_type = torch.index_select(batch.edge_type, 0, torch.tensor(select_edge_indexes))
         
         else:
-            # norm_2_transform = T.Distance()
-            # batch = norm_2_transform(batch)
             num_edge = batch.edge_index.shape[1]
             x_1 = batch.x[batch.edge_index[0]]
             x_2 = batch.x[batch.edge_index[1]]
@@ -465,6 +465,7 @@ def contrastive_training(epoch):
 
         batch = batch.to_homogeneous()
 
+        # subgraph augmentation
         batch_aug = augment(batch, similarity=args.drop_distance)
         y_pretrain = model(batch.x.to(device), 
                            batch.edge_index.to(device),
@@ -476,9 +477,12 @@ def contrastive_training(epoch):
                                batch_aug.edge_type.to(device), cl=True)[start: start+cl_batch_size]
         y_pretrain_aug = post_transformation(y_pretrain_aug)
         
-        
-        supervised_loss = supervised_criterion(torch.cat([y_pretrain[:batch_size].unsqueeze(1), y_pretrain_aug[:batch_size].unsqueeze(1)], dim=1), y)
-        unsupervised_loss = unsupervised_criterion(y_pretrain[batch_size: batch_size+cl_batch_size], y_pretrain_aug[batch_size: batch_size+cl_batch_size])
+        # supervised InfoNCE for items with labels
+        supervised_loss = supervised_criterion(torch.cat([y_pretrain[:batch_size].unsqueeze(1), 
+                                                          y_pretrain_aug[:batch_size].unsqueeze(1)], dim=1), y)
+        # unsupervised InfoNCE for items without labels
+        unsupervised_loss = unsupervised_criterion(y_pretrain[batch_size: batch_size+cl_batch_size], 
+                                                   y_pretrain_aug[batch_size: batch_size+cl_batch_size])
         
         if args.cl_joint_loss:
             loss = supervised_loss + unsupervised_loss
@@ -785,27 +789,22 @@ if args.inference == False:
         wandb.run.summary['best_val_ap'] = best_val_ap
 
     print(f"Complete Training (best val_ap: {best_val_ap})")
-    print("best confuse matrix: ")
-    print(best_confuse_matrix)
-
-    print(model.convs[0].temp.data.detach().cpu().numpy())
-    print(model.convs[1].temp.data.detach().cpu().numpy())
-    print(model.convs[2].temp.data.detach().cpu().numpy())
+    
 
 #    with open(args.record_file, 'a+') as f:
 #        f.write(f"{args.model_id:2d} {args.h_dim:3d} {args.n_layers:2d} {args.lr:.4f} {end:02d} {float(val_ap_list[-1]):.4f} {np.argmax(val_ap_list)+5:02d} {float(np.max(val_ap_list)):.4f}\n")
 
 
-# if args.inference == True:
-
-model = torch.load(model_path, map_location=args.device)
-print(model_path)
-y_pred = test()
-result_path = osp.join('best_result', "pyg_pred_session1_" + args.model + "_" + str(model_id) + ".json")
-with open(result_path, 'w+') as f:
-    for i in range(len(test_id)):
-        y_dict = {}
-        y_dict["item_id"] = int(test_id[i])
-        y_dict["score"] = float(y_pred[i])
-        json.dump(y_dict, f)
-        f.write('\n')
+if args.inference == True:
+    model = torch.load(model_path, map_location=args.device)
+    print(model_path)
+    y_pred = test()
+    # result_path = osp.join('best_result', "pyg_pred_session1_" + args.model + "_" + str(model_id) + ".json")
+    result_path = "../submit/submit_" + datetime.datetime.now().strftime('%Y%m%d_%H%M%S') + ".json"
+    with open(result_path, 'w+') as f:
+        for i in range(len(test_id)):
+            y_dict = {}
+            y_dict["item_id"] = int(test_id[i])
+            y_dict["score"] = float(y_pred[i])
+            json.dump(y_dict, f)
+            f.write('\n')
