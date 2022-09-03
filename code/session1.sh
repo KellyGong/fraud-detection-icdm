@@ -20,6 +20,4 @@ python main.py --dataset  $pyg_data_session1".pt" \
                --cl_lr 0.002 \
                --h_dim 64 \
                --lr 0.002 \
-               --model_id 3 \
-               --focal
-
+               --model_id 1 \

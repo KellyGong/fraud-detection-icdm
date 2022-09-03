@@ -6,7 +6,7 @@ from torch.nn import Linear, Parameter
 from torch_geometric.nn import MessagePassing
 from torch_geometric.nn.conv.gcn_conv import gcn_norm
 from torch_geometric.nn import RGCNConv
-from torch_geometric.nn.conv.rgcn_conv import RGCNConv_weight
+from .rgcn_conv_weight import RGCNConv_weight
 
 
 class RGPRGNN(torch.nn.Module):

@@ -63,7 +63,7 @@ parser.add_argument("--drop_distance", action='store_true', default=False)
 
 # sample unbalance hyperparameter
 parser.add_argument("--balance", type=bool, default=False)
-parser.add_argument("--focal", type=bool, default=False)
+parser.add_argument("--focal", action='store_true', default=False)
 parser.add_argument("--positive_weight", type=float, default=0.8)
 parser.add_argument("--val_positive_rate", type=float, default=0.0625)
 
