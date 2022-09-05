@@ -6,7 +6,7 @@ import json
 from tabnanny import verbose
 import time
 
-from utils import EarlyStop, setup_seed
+from utils import setup_seed
 
 import numpy as np
 import torch
@@ -14,19 +14,9 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from itertools import permutations
 from torch_geometric.utils import to_undirected
-from torch_geometric.loader import NeighborLoader, HGTLoader
-import torch_geometric.transforms as T
-from sklearn.metrics import average_precision_score
+from torch_geometric.loader import NeighborLoader
 
-from torch.nn import Linear
-from torch_geometric.nn import RGCNConv
-
-from model import RGCN, RGPRGNN, RGAT, Node_Transformation, HGT, ResRGCN, Post_Transformation
-import nni
-import wandb
-import random
-from info_nce import InfoNCE
-from losses import SupConLoss
+import datetime
 
 
 parser = argparse.ArgumentParser()
@@ -42,6 +32,8 @@ parser.add_argument("--fanout", type=int, default=150,
 parser.add_argument("--n_layers", type=int, default=3,
                     help="number of propagation rounds")
 
+parser.add_argument("--session1", action='store_true', default=False)
+
 parser.add_argument("--test-file", type=str, default="dataset/icdm2022_session2_test_ids.txt")
 parser.add_argument("--json-file", type=str, default="pyg_pred_session2.json")
 
@@ -49,7 +41,7 @@ parser.add_argument("--dropedge", type=float, default=0.2)
 
 # build item-item relation through feature proximity and metapath (common neighbor b)
 parser.add_argument("--item_item", action='store_true', default=False)
-parser.add_argument("--node_sample", type=int, default=80000)
+parser.add_argument("--node_sample", type=int, default=30000)
 parser.add_argument("--edge_add", type=int, default=500000)
 parser.add_argument("--metapath", type=bool, default=False)
 parser.add_argument("--meta_fraction", type=float, default=0.1)
@@ -58,14 +50,15 @@ parser.add_argument("--pre_transform", action='store_true', default=False)
 
 parser.add_argument("--device", type=str, default="cuda")
 
+parser.add_argument("--model_id", type=int, default=1)
+
 args = parser.parse_args()
 
 
 # model_id = random.randint(0, 100000)
 # model_path = osp.join('best_model', args.model + "_" + str(model_id) + ".pth")
 
-model_path = 'best_model/RGPRGNN_7235.pth'
-model_id = '7235'
+model_path = osp.join('checkpoint', args.model + "_" + str(args.model_id) + ".pth")
 
 print(model_path)
 
@@ -78,12 +71,9 @@ labeled_class = args.labeled_class
 
 # print(hgraph.node_types)
 
-# if args.inference == False:
-#     # train_idx = hgraph[labeled_class].pop('train_idx')
-#     train_idx = hgraph[labeled_class]['train_idx']
-#     if args.validation:
-#         # val_idx = hgraph[labeled_class].pop('val_idx')
-#         val_idx = hgraph[labeled_class]['val_idx']
+if args.session1:
+    train_idx = hgraph[labeled_class]['train_idx']
+    val_idx = hgraph[labeled_class]['val_idx']
 
 test_id = [int(x) for x in open(args.test_file).readlines()]
 converted_test_id = []
@@ -97,6 +87,37 @@ test_idx = torch.LongTensor(converted_test_id)
 num_node_types = len(hgraph.node_types)
 
 print(args)
+
+def add_item_item_edge(hgraph, num_node2sample, num_edge2add, train_idx, val_idx, test_idx):
+    start_time = time.time()
+    train_size, val_size, test_size, all_size = torch.numel(train_idx), torch.numel(val_idx), torch.numel(test_idx), torch.numel(train_idx) + torch.numel(val_idx) + torch.numel(test_idx)
+    # train_p, val_p, test_p = 0.56, 0.14, 0.3
+    train_p, val_p, test_p = train_size / all_size, val_size / all_size, test_size / all_size
+    print('Adding {} edges item-I-item among {} nodes...'.format(num_edge2add, num_node2sample))
+    train_sample_idx = train_idx[np.random.choice(len(train_idx), int(train_p*num_node2sample), replace=False)]
+    val_sample_idx = val_idx[np.random.choice(len(val_idx), int(val_p*num_node2sample), replace=False)]
+    test_sample_idx = test_idx[np.random.choice(len(test_idx), int(test_p*num_node2sample), replace=False)]
+    all_sample_idx = torch.cat([train_sample_idx, val_sample_idx, test_sample_idx])
+    # distance
+    dist = torch.cdist(hgraph['item'].x[all_sample_idx], hgraph['item'].x[all_sample_idx])
+    dist[torch.triu(dist, diagonal=1)==0] = -1 # remove lower triangle
+    dist[dist==0] = -1 # remove nodes that have all 0 feature
+
+    # select top similar node pair 
+    dist = np.array(dist)
+    off_diag_ind = dist!=-1
+    off_diag = dist[off_diag_ind]
+    threshold = np.partition(off_diag, num_edge2add // 2)[:num_edge2add//2].max()
+    edge2add_idx = np.where((dist<=threshold) & off_diag_ind)
+
+    # add new relation "item-item" to the selected node pairs
+    sources, targets = all_sample_idx[edge2add_idx[0]], all_sample_idx[edge2add_idx[1]]
+    hgraph['item', 'I', 'item'].edge_index = torch.vstack([torch.cat([sources, targets]), torch.cat([targets, sources])])
+    print("It took {} minutes to add {} edges among {} nodes".format((time.time() - start_time)/60, hgraph['item', 'I', 'item'].edge_index.shape[1], torch.numel(all_sample_idx)))
+    return hgraph
+
+if args.item_item:
+    hgraph = add_item_item_edge(hgraph, args.node_sample, args.edge_add, train_idx, val_idx, test_idx)
 
 def gen_dataloader(hgraph, labeled_class, idx, args, shuffle=False, balance=False):
     if balance:
@@ -164,9 +185,6 @@ def add_item_item_edge(hgraph, num_node2sample, num_edge2add, train_idx, val_idx
     hgraph['item', 'I', 'item'].edge_index = torch.vstack([torch.cat([sources, targets]), torch.cat([targets, sources])])
     print("It took {} minutes to add {} edges among {} nodes".format((time.time() - start_time)/60, hgraph['item', 'I', 'item'].edge_index.shape[1], torch.numel(all_sample_idx)))
     return hgraph
-
-if args.item_item:
-    hgraph = add_item_item_edge(hgraph, args.node_sample, args.edge_add, train_idx, val_idx, test_idx)
 
 ###################### add a new edge_type item-I2-item based on common neighbor b
 def add_metapath(batch):
@@ -238,7 +256,7 @@ def test():
 model = torch.load(model_path, map_location=args.device)
 print(model_path)
 y_pred = test()
-result_path = osp.join('best_result', "pyg_pred_session2_" + args.model + "_" + str(model_id) + ".json")
+result_path = "../submit/submit_" + datetime.datetime.now().strftime('%Y%m%d_%H%M%S') + ".json"
 with open(result_path, 'w+') as f:
     for i in range(len(test_id)):
         y_dict = {}

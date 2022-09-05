@@ -11,13 +11,9 @@ python main.py --dataset  $pyg_data_session1".pt" \
                --alpha 0.5 \
                --batch_size 256 \
                --dropout 0.2 \
-               --cl \
-               --cl_batch 2048 \
-               --cl_common_lr 0.002 \
-               --cl_epoch 3 \
-               --cl_finetune_lr 0.005 \
-               --cl_joint_loss \
-               --cl_lr 0.002 \
                --h_dim 64 \
-               --lr 0.002 \
+               --lr 0.003 \
                --model_id 1 \
+               --item_item \
+               --node_sample 30000 \
+               --edge_add 500000

@@ -96,27 +96,9 @@ parser.add_argument("--lr", type=float, default=0.002)
 parser.add_argument("--device", type=str, default="cuda")
 parser.add_argument("--model_id", type=int, default=1)
 
-# grid search hyperparameters
-parser.add_argument("--nni", action='store_true', default=False)
-parser.add_argument("--wandb", action='store_true', default=True)
-parser.add_argument("--debug", action='store_true', default=False)
-
 args = parser.parse_args()
 
-if args.nni:
-    params = nni.get_next_parameter()
-    old_params = vars(args)
-    old_params.update(params)
-    args = argparse.Namespace(**old_params)
-
-if args.wandb:
-    wandb.init(project='icdm2022',
-               tags=[f'{args.model}'],
-               entity='gztql',
-               config=vars(args))
-    args = argparse.Namespace(**wandb.config)
-
-model_path = args.model + "_" + str(args.model_id) + ".pth"
+model_path = "checkpoint/" + args.model + "_" + str(args.model_id) + ".pth"
 
 print(model_path)
 
@@ -506,7 +488,6 @@ def train(epoch):
 
     pbar = tqdm(total=int(len(train_loader.dataset)), ascii=True)
     pbar.set_description(f'Epoch {epoch:02d}')
-    loss_fn = focal_loss(num_classes=2)
     total_loss = total_correct = total_examples = 0
     y_pred = []
     y_true = []
@@ -545,12 +526,7 @@ def train(epoch):
 
         # y_hat = model(batch.x_dict, batch.edge_index_dict)[:batch_size]
 
-        if args.balance:
-            loss = F.cross_entropy(y_hat, y, weight=class_balance_ratio)
-        if args.focal:
-            loss = loss_fn(y_hat, y)
-        else:
-            loss = F.cross_entropy(y_hat, y)
+        loss = F.cross_entropy(y_hat, y)
         
         loss.backward()
         optimizer.step()
@@ -560,8 +536,6 @@ def train(epoch):
         total_correct += int((y_hat.argmax(dim=-1) == y).sum())
         total_examples += batch_size
         pbar.update(batch_size)
-        if args.debug:
-            break
     pbar.close()
     ap_score = average_precision_score(torch.hstack(y_true).numpy(), torch.hstack(y_pred).numpy())
 
@@ -618,8 +592,6 @@ def val():
         total_correct += int((y_hat.argmax(dim=-1) == y).sum())
         total_examples += batch_size
         pbar.update(batch_size)
-        if args.debug:
-            break
     pbar.close()
     ap_score = average_precision_score(torch.hstack(y_true).numpy(), torch.hstack(y_pred).numpy())
     confuse_matrix = confusion_matrix(torch.hstack(y_true).numpy(), torch.hstack(y_pred_binary).numpy())
@@ -656,8 +628,6 @@ def pseudo_label_gen():
         pbar.update(batch_size)
         y_pred.append(F.softmax(y_hat, dim=1)[:, 1].detach().cpu())
         node_ids.append(batch.n_id[start + batch_size: start + node_size])
-        # if args.debug or i > 2000:
-        #     break
     pbar.close()
 
     y_pred_tensor = torch.cat(y_pred)
@@ -748,22 +718,6 @@ if args.inference == False:
             val_loss, val_acc, val_ap, confuse_matrix = val()
             print(f'Val: Epoch: {epoch:02d}, Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, AP_Score: {val_ap:.4f}')
 
-            # nni
-            if args.nni:
-                nni.report_intermediate_result({
-                    "default": val_ap,
-                    "loss": val_loss,
-                    "acc": val_acc
-                })
-            
-            # wandb
-            if args.wandb:
-                wandb.log({
-                    "val_ap": val_ap,
-                    "val_loss": val_loss,
-                    "val_acc": val_acc
-                }, step=epoch)
-
             # save model
             if val_ap > best_val_ap:
                 best_val_ap = val_ap
@@ -780,14 +734,7 @@ if args.inference == False:
             pseudo_label_gen()
             earlystop = EarlyStop(interval=args.early_stopping)
 
-    if args.nni:
-        nni.report_final_result(best_val_ap)
-
-    if args.wandb:
-        wandb.run.summary['best_val_ap'] = best_val_ap
-
     print(f"Complete Training (best val_ap: {best_val_ap})")
-    
 
 #    with open(args.record_file, 'a+') as f:
 #        f.write(f"{args.model_id:2d} {args.h_dim:3d} {args.n_layers:2d} {args.lr:.4f} {end:02d} {float(val_ap_list[-1]):.4f} {np.argmax(val_ap_list)+5:02d} {float(np.max(val_ap_list)):.4f}\n")

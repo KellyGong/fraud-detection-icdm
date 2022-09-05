@@ -14,7 +14,7 @@ class RGPRGNN(torch.nn.Module):
         super().__init__()
         self.convs = torch.nn.ModuleList()
         for i in range(n_layers):
-            self.convs.append(RGCNConv_weight(hidden_channels, hidden_channels, num_relations, num_bases=num_bases, aggr='mean'))
+            self.convs.append(RGCNConv(hidden_channels, hidden_channels, num_relations, num_bases=num_bases, aggr='mean'))
 
         self.pre_transform = pre_transform
         if not self.pre_transform:

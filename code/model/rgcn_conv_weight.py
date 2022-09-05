@@ -10,6 +10,7 @@ from torch_sparse import SparseTensor, masked_select_nnz, matmul
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.typing import Adj, OptTensor
 from torch_geometric.nn.inits import glorot, zeros
+from torch_geometric.nn.conv.rgcn_conv import masked_edge_index
 import numpy as np
 
 

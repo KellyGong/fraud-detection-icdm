@@ -10,3 +10,49 @@ pip install info-nce-pytorch
 ```
 
 GPU 依赖：CUDA 11.3, CUDNN 8.4
+
+
+## Reimplement Result
+
+### Session 1
+
+```
+cd code
+```
+
+Generate Pyg Dataset
+```
+sh format_pyg_session1.sh
+```
+
+Inference
+```
+sh session1_inference.sh
+```
+
+Training
+```
+sh session1_train.sh
+```
+
+
+### Session 2
+```
+cd code
+```
+
+Generate Pyg Dataset
+```
+sh format_pyg_session2.sh
+```
+
+Inference
+```
+sh session2_inference.sh
+```
+
+Training
+```
+sh session2_train.sh
+```
+
